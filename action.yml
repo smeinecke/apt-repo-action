@@ -33,7 +33,7 @@ inputs:
     description: "Location of APT repo folder relative to root of Github pages"
     required: false
     default: "repo"
-  git_repo:
+  github_repository:
     description: "repo for the Github pages"
     required: false
   debug:
