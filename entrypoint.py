@@ -9,7 +9,7 @@ import json
 from debian.debfile import DebFile
 from key import detectPublicKey, importPrivateKey
 
-debug = True
+debug = os.environ.get('INPUT_DEBUG', False)
 
 if debug:
     logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
