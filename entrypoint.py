@@ -188,8 +188,9 @@ if __name__ == '__main__':
     )
 
     git_repo.git.add('*')
+    deploy_commit_sha = os.environ.get('GITHUB_SHA')
     git_repo.index.commit(
-        '[apt-action] Update apt repo\n\n\napt-action-metadata{}'.format(current_metadata_str)
+        '[apt-action] Update apt repo\n\n\napt-action-metadata{}\n\ndeploying: {}'.format(current_metadata_str, deploy_commit_sha)
     )
     git_repo.git.push('--set-upstream', 'origin', gh_branch)
 
