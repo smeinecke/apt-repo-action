@@ -40,8 +40,9 @@ class DebRepositoryBuilder:
         self.deb_files = []
         self.git_repo = None
         self.gpg = gnupg.GPG()
-        self.private_key_id = None
+        self.private_key_id = ''
         self.deb_files_hashes = {}
+        self.apt_dir = ''
 
     def run(self, options) -> None:
         try:
@@ -187,12 +188,12 @@ class DebRepositoryBuilder:
         # Prepare repo
         logging.info("-- Preparing repo directory --")
 
-        apt_dir = os.path.join(self.git_working_folder, self.config["apt_folder"])
-        apt_conf_dir = os.path.join(apt_dir, "conf")
+        self.apt_dir = os.path.join(self.git_working_folder, self.config["apt_folder"])
+        apt_conf_dir = os.path.join(self.apt_dir, "conf")
 
-        if not os.path.isdir(apt_dir):
+        if not os.path.isdir(self.apt_dir):
             logging.info("Existing repo not detected, creating new repo")
-            os.mkdir(apt_dir)
+            os.mkdir(self.apt_dir)
             os.mkdir(apt_conf_dir)
 
         logging.debug("Creating repo config")
@@ -222,7 +223,7 @@ class DebRepositoryBuilder:
                 [
                     "reprepro",
                     "-b",
-                    self.config["apt_dir"],
+                    self.apt_dir,
                     "--export=silent-never",
                     "includedeb",
                     self.config["deb_file_version"],
