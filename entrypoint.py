@@ -241,7 +241,7 @@ class DebRepositoryBuilder:
         )
 
         logging.debug("Export and sign repo")
-        subprocess.run(["reprepro", "-b", self.config["apt_dir"], "export"], check=True)
+        subprocess.run(["reprepro", "-b", self.apt_dir, "export"], check=True)
 
         logging.info("-- Done adding package to repo --")
 
