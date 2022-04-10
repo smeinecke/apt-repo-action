@@ -28,7 +28,7 @@ class DebRepositoryBuilder:
             "github_repo": None,
             "github_token": None,
             "supported_arch": None,
-            "supported_versions": None,
+            "supported_version": None,
             "deb_file_target_version": None,
             "gh_branch": None,
             "apt_folder": None,
