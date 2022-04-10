@@ -7,198 +7,277 @@ import glob
 import shutil
 import re
 import json
+import hashlib
 import subprocess
+
 from debian.debfile import DebFile
 from key import detectPublicKey, importPrivateKey
 
-debug = os.environ.get('INPUT_DEBUG', False)
+log_level = logging.INFO
+if os.environ.get("INPUT_DEBUG", False):
+    log_level = logging.DEBUG
 
-if debug:
-    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
-else:
-    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
-
-if __name__ == '__main__':
-    logging.info('-- Parsing input --')
-
-    github_token = os.environ.get('INPUT_GITHUB_TOKEN')
-    supported_arch = os.environ.get('INPUT_REPO_SUPPORTED_ARCH')
-    supported_version = os.environ.get('INPUT_REPO_SUPPORTED_VERSION')
-    deb_file_path = os.environ.get('INPUT_FILE')
-    deb_file_target_version = os.environ.get('INPUT_FILE_TARGET_VERSION')
-    github_repo = os.environ.get('GITHUB_REPOSITORY')
-
-    gh_branch = os.environ.get('INPUT_PAGE_BRANCH', 'gh-pages')
-    apt_folder = os.environ.get('INPUT_REPO_FOLDER', 'repo')
-
-    if None in (github_token, supported_arch, supported_version, deb_file_path):
-        logging.error('Required key is missing')
-        sys.exit(1)
-
-    supported_arch_list = supported_arch.strip().split('\n')
-    supported_version_list = supported_version.strip().split('\n')
-    deb_files = set()
-    for line in deb_file_path.strip().split('\n'):
-        for s in glob.glob(line.strip('" ')):
-            deb_files.add(s)
+logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
 
 
-    deb_file_path = list(deb_files)
-    deb_file_version = deb_file_target_version.strip()
+class DebRepositoryBuilder:
+    def __init__(
+        self,
+    ) -> None:
+        self.config = {
+            "github_repo": None,
+            "github_token": None,
+            "supported_arch": None,
+            "supported_versions": None,
+            "deb_file_target_version": None,
+            "gh_branch": None,
+            "apt_folder": None,
+            "key_public": None,
+            "key_private": None,
+        }
+        self.supported_versions = []
+        self.supported_archs = []
+        self.deb_files = []
+        self.git_repo = None
+        self.gpg = gnupg.GPG()
+        self.private_key_id = None
+        self.deb_files_hashes = {}
 
-    logging.debug(supported_arch_list)
-    logging.debug(supported_version_list)
-    logging.debug(deb_file_path)
-    logging.debug(deb_file_version)
+    def run(self, options) -> None:
+        try:
+            self.parseInputs(options)
+            self.cloneRepo()
+            self.generateMetadata()
+            self.fetchRepositoryMetadata()
+            self.prepare()
+            self.addFiles()
+            self.finish()
+        except Exception as e:
+            logging.exception(e)
+            sys.exit(1)
 
-    if deb_file_version not in supported_version_list:
-        logging.error('File version target is not listed in repo supported version list')
-        sys.exit(1)
-
-    key_public = os.environ.get('INPUT_PUBLIC_KEY')
-    key_private = os.environ.get('INPUT_PRIVATE_KEY')
-    key_passphrase = os.environ.get('INPUT_KEY_PASSPHRASE')
-
-    logging.debug(github_token)
-    logging.debug(supported_arch_list)
-    logging.debug(supported_version_list)
-
-    logging.info('-- Done parsing input --')
-
-    # Clone repo
-
-    logging.info('-- Cloning current Github page --')
-
-    github_user = github_repo.split('/')[0]
-    github_slug = github_repo.split('/')[1]
-
-    git_working_folder = github_slug + "-" + gh_branch
-
-    if os.path.exists(git_working_folder):
-        shutil.rmtree(git_working_folder)
-
-    logging.debug("cwd : {}".format(os.getcwd()))
-    logging.debug(os.listdir())
-
-    git_repo = git.Repo.clone_from(
-        'https://x-access-token:{}@github.com/{}.git'.format(github_token, github_repo),
-        git_working_folder,
-    )
-
-    git_refs = git_repo.remotes.origin.refs
-    git_refs_name = list(map(lambda x: str(x).split('/')[-1], git_refs))
-
-    logging.debug(git_refs_name)
-
-    if gh_branch not in git_refs_name:
-        git_repo.git.checkout(b=gh_branch)
-    else:
-        git_repo.git.checkout(gh_branch)
-
-    # Generate metadata
-    logging.debug("cwd : {}".format(os.getcwd()))
-    logging.debug(os.listdir())
-
-    deb_file_handle = DebFile(filename=deb_file_path[0])
-    deb_file_control = deb_file_handle.debcontrol()
-
-    current_metadata = {
-        'format_version': 1,
-        'sw_version': deb_file_control['Version'],
-        'sw_architecture': deb_file_control['Architecture'],
-        'linux_version': deb_file_version
-    }
-
-    current_metadata_str = json.dumps(current_metadata)
-    logging.debug('Metadata {}'.format(current_metadata_str))
-
-    # Get metadata
-    all_commit = git_repo.iter_commits(gh_branch)
-    all_apt_action_commit = list(filter(lambda x: (x.message[:12] == '[apt-action]'), all_commit))
-    apt_action_metadata_str = list(
-        map(
-            lambda x: re.findall('apt-action-metadata({.+})$', x.message),
-            all_apt_action_commit,
+    def parseInputs(self, options) -> None:
+        logging.info("-- Parsing input --")
+        self.config["github_repo"] = options.get("GITHUB_REPOSITORY")
+        self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
+        self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
+        self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
+        self.config["deb_file_target_version"] = options.get(
+            "INPUT_FILE_TARGET_VERSION"
         )
-    )
-    apt_action_valid_metadata_str = list(filter(lambda x: len(x) > 0, apt_action_metadata_str))
-    apt_action_metadata = list(map(lambda x: json.loads(x[0]), apt_action_valid_metadata_str))
+        self.config["gh_branch"] = options.get("INPUT_PAGE_BRANCH", "gh-pages")
+        self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
+        self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
+        self.config["key_private"] = options.get("INPUT_PRIVATE_KEY")
 
-    logging.debug(all_apt_action_commit)
-    logging.debug(apt_action_valid_metadata_str)
+        for ky, vl in self.config.items():
+            if not vl:
+                raise ValueError(f"Missing required parameter {ky}")
+            self.config[ky] = vl.strip()
 
-    for check_metadata in apt_action_metadata:
-        if (check_metadata == current_metadata):
-            logging.info('This version of this package has already been added to the repo, skipping it')
-            sys.exit(0)
+        deb_file_path = options.get("INPUT_FILE", "")
+        file_list = set()
+        for line in deb_file_path.strip().split("\n"):
+            for s in glob.glob(line.strip('" ')):
+                file_list.add(s)
 
-    logging.info('-- Done cloning current Github page --')
+        self.deb_files = list(file_list)
+        if not self.deb_files:
+            raise ValueError("Missing required parameter files")
 
-    # Prepare key
+        self.supported_archs = self.config["supported_arch"].split("\n")
+        self.supported_versions = self.config["supported_version"].split("\n")
+        self.config["deb_file_version"] = self.config["deb_file_target_version"]
 
-    logging.info('-- Importing key --')
+        # optional parameter
+        self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
 
-    key_file = os.path.join(git_working_folder, 'public.key')
-    gpg = gnupg.GPG()
+        logging.debug(self.config)
 
-    detectPublicKey(gpg, key_file, key_public)
-    private_key_id = importPrivateKey(gpg, key_private)
+        if self.config["deb_file_version"] not in self.supported_versions:
+            raise ValueError(
+                f'File version "{self.config["deb_file_version"]}" is not listed in repo supported version list'
+            )
 
-    logging.info('-- Done importing key --')
+        logging.info("-- Done parsing input --")
 
-    # Prepare repo
+    def cloneRepo(self) -> None:
+        # Clone repo
+        logging.info("-- Cloning current Github page --")
+        github_slug = self.config["github_repo"].split("/")[1]
 
-    logging.info('-- Preparing repo directory --')
+        self.git_working_folder = f"{github_slug}-{self.config['gh_branch']}"
 
-    apt_dir = os.path.join(git_working_folder, apt_folder)
-    apt_conf_dir = os.path.join(apt_dir, 'conf')
+        # cleanup current folder
+        if os.path.exists(self.git_working_folder):
+            shutil.rmtree(self.git_working_folder)
 
-    if not os.path.isdir(apt_dir):
-        logging.info('Existing repo not detected, creating new repo')
-        os.mkdir(apt_dir)
-        os.mkdir(apt_conf_dir)
+        logging.debug(f"cwd: {os.getcwd()}")
+        logging.debug(os.listdir())
 
-    logging.debug('Creating repo config')
+        self.git_repo = git.Repo.clone_from(
+            f'https://x-access-token:{self.config["github_token"]}@github.com/{self.config["github_repo"]}.git',
+            self.git_working_folder,
+        )
 
-    with open(os.path.join(apt_conf_dir, 'distributions'), 'w') as distributions_file:
-        for codename in supported_version_list:
-            distributions_file.write('Description: {}\n'.format(github_repo))
-            distributions_file.write('Codename: {}\n'.format(codename))
-            distributions_file.write('Architectures: {}\n'.format(' '.join(supported_arch_list)))
-            distributions_file.write('Components: main\n')
-            distributions_file.write('SignWith: {}\n'.format(private_key_id))
-            distributions_file.write('\n\n')
+        git_refs = self.git_repo.remotes.origin.refs
+        git_refs_name = list(map(lambda x: str(x).split("/")[-1], git_refs))
+        logging.debug(git_refs_name)
 
-    logging.info('-- Done preparing repo directory --')
+        if self.config["gh_branch"] not in git_refs_name:
+            self.git_repo.git.checkout(b=self.config["gh_branch"])
+        else:
+            self.git_repo.git.checkout(self.config["gh_branch"])
 
-    # Fill repo
+    def generateMetadata(self) -> None:
+        # Generate metadata
+        logging.debug(f"cwd: {os.getcwd()}")
+        logging.debug(os.listdir())
 
-    logging.info('-- Adding package(s) to repo --')
+        deb_file_handle = DebFile(filename=self.deb_files[0])
+        deb_file_control = deb_file_handle.debcontrol()
 
-    for deb_file in deb_file_path:
-        logging.info('Adding {}'.format(deb_file))
-        subprocess.run(['reprepro','-b', apt_dir, '--export=silent-never', 'includedeb', deb_file_version, deb_file], check=True)
+        self.current_metadata = {
+            "format_version": 1,
+            "sw_version": deb_file_control["Version"],
+            "sw_architecture": deb_file_control["Architecture"],
+            "linux_version": self.config["deb_file_version"],
+        }
 
-    logging.debug('Signing to unlock key on gpg agent')
-    gpg.sign('test', keyid=private_key_id, passphrase=key_passphrase)
+        logging.debug(f"Metadata {json.dumps(self.current_metadata)}")
 
-    logging.debug('Export and sign repo')
-    subprocess.run(['reprepro', '-b', apt_dir, 'export'], check=True)
+    def fetchRepositoryMetadata(self) -> None:
+        # Get metadata
+        all_commit = self.git_repo.iter_commits(self.config["gh_branch"])
+        all_apt_action_commit = list(
+            filter(lambda x: (x.message[:12] == "[apt-action]"), all_commit)
+        )
+        metadata_re = re.compile(r"apt-action-metadata({.+})$")
+        apt_action_metadata_str = list(
+            map(lambda x: metadata_re.findall(x.message), all_apt_action_commit)
+        )
+        apt_action_valid_metadata_str = list(
+            filter(lambda x: len(x) > 0, apt_action_metadata_str)
+        )
+        apt_action_metadata = list(
+            map(lambda x: json.loads(x[0]), apt_action_valid_metadata_str)
+        )
 
-    logging.info('-- Done adding package to repo --')
+        logging.debug(all_apt_action_commit)
+        logging.debug(apt_action_valid_metadata_str)
 
-    # Commiting and push changes
+        for check_metadata in apt_action_metadata:
+            if check_metadata == self.current_metadata:
+                logging.info(
+                    "This version of this package has already been added to the repo, skipping it"
+                )
+                sys.exit(0)
 
-    logging.info('-- Saving changes --')
+        logging.info("-- Done cloning current Github page --")
 
-    git_repo.config_writer().set_value(
-        'user', 'email', '{}@users.noreply.github.com'.format(github_user)
-    )
+    def prepare(self) -> None:
+        # Prepare key
+        logging.info("-- Importing key --")
+        key_file = os.path.join(self.git_working_folder, "public.key")
 
-    git_repo.git.add('*')
-    git_repo.index.commit(
-        '[apt-action] Update apt repo\n\n\napt-action-metadata{}'.format(current_metadata_str)
-    )
-    git_repo.git.push('--set-upstream', 'origin', gh_branch)
+        detectPublicKey(self.gpg, key_file, self.config["key_public"])
+        self.private_key_id = importPrivateKey(self.gpg, self.config["key_private"])
+        logging.info("-- Done importing key --")
 
-    logging.info('-- Done saving changes --')
+        # Prepare repo
+        logging.info("-- Preparing repo directory --")
+
+        apt_dir = os.path.join(self.git_working_folder, self.config["apt_folder"])
+        apt_conf_dir = os.path.join(apt_dir, "conf")
+
+        if not os.path.isdir(apt_dir):
+            logging.info("Existing repo not detected, creating new repo")
+            os.mkdir(apt_dir)
+            os.mkdir(apt_conf_dir)
+
+        logging.debug("Creating repo config")
+
+        with open(
+            os.path.join(apt_conf_dir, "distributions"), "w"
+        ) as distributions_file:
+            for codename in self.supported_versions:
+                distributions_file.write(f"Description: {self.config['github_repo']}\n")
+                distributions_file.write(f"Codename: {codename}\n")
+                distributions_file.write(
+                    "Architectures: {}\n".format(" ".join(self.supported_archs))
+                )
+                distributions_file.write("Components: main\n")
+                distributions_file.write(f"SignWith: {self.private_key_id}\n")
+                distributions_file.write("\n\n")
+
+        logging.info("-- Done preparing repo directory --")
+
+    def addFiles(self) -> None:
+        # Fill repo
+        logging.info("-- Adding package(s) to repo --")
+
+        for deb_file in self.deb_files:
+            logging.info(f"Adding {deb_file}")
+            subprocess.run(
+                [
+                    "reprepro",
+                    "-b",
+                    self.config["apt_dir"],
+                    "--export=silent-never",
+                    "includedeb",
+                    self.config["deb_file_version"],
+                    deb_file,
+                ],
+                check=True,
+            )
+            self.deb_files_hashes[deb_file] = self.generateHash(deb_file, "sha1")
+
+        logging.debug("Signing to unlock key on gpg agent")
+        self.gpg.sign(
+            "test",
+            keyid=self.private_key_id,
+            passphrase=self.config.get("key_passphrase", ""),
+        )
+
+        logging.debug("Export and sign repo")
+        subprocess.run(["reprepro", "-b", self.config["apt_dir"], "export"], check=True)
+
+        logging.info("-- Done adding package to repo --")
+
+    @staticmethod
+    def generateHash(filename, hash_type) -> str:
+        h = hashlib.new(hash_type)
+        b = bytearray(128 * 1024)
+        mv = memoryview(b)
+        with open(filename, "rb", buffering=0) as f:
+            for n in iter(lambda: f.readinto(mv), 0):
+                h.update(mv[:n])
+        return h.hexdigest()
+
+    def finish(self) -> None:
+        # Commiting and push changes
+        logging.info("-- Saving changes --")
+
+        github_user = self.config["github_repo"].split("/")[0]
+        self.git_repo.config_writer().set_value(
+            "user", "email", f"{github_user}@users.noreply.github.com"
+        )
+
+        self.git_repo.git.add("*")
+
+        commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
+        for deb_file in self.deb_files:
+            commit_msg += "* {} {}\n".format(deb_file, self.deb_files_hashes[deb_file])
+
+        commit_msg += "\n\napt-action-metadata{}".format(
+            json.dumps(self.current_metadata)
+        )
+        self.git_repo.index.commit(commit_msg)
+        self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
+
+        logging.info("-- Done saving changes --")
+
+
+if __name__ == "__main__":
+    dpb = DebRepositoryBuilder()
+    dpb.run(os.environ)
