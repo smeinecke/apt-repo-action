@@ -38,7 +38,7 @@ inputs:
     required: false
 runs:
   using: "docker"
-  image: "Dockerfile"
+  image: "smeinecke/apt-repo-action:latest"
 branding:
   icon: "upload-cloud"
   color: "red"
