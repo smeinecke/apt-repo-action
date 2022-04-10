@@ -20,7 +20,12 @@ if os.environ.get("INPUT_DEBUG", False):
 logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
 
 
+
 class DebRepositoryBuilder:
+    metadata_re = re.compile(r"apt-action-metadata:?\s*({.+})$")
+
+    """Init process
+    """
     def __init__(
         self,
     ) -> None:
@@ -45,6 +50,11 @@ class DebRepositoryBuilder:
         self.apt_dir = ''
 
     def run(self, options) -> None:
+        """Process request and create/update repository
+
+        :param options: list of options for this call
+        :type options: dict
+        """
         try:
             self.parseInputs(options)
             self.cloneRepo()
@@ -58,6 +68,12 @@ class DebRepositoryBuilder:
             sys.exit(1)
 
     def parseInputs(self, options) -> None:
+        """Parse all given arguments and validate syntax
+
+        :param options: options to validate
+        :type options: dict
+        :raises ValueError: Key or Value missing / has invalid syntax
+        """
         logging.info("-- Parsing input --")
         self.config["github_repo"] = options.get("GITHUB_REPOSITORY")
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
@@ -103,7 +119,8 @@ class DebRepositoryBuilder:
         logging.info("-- Done parsing input --")
 
     def cloneRepo(self) -> None:
-        # Clone repo
+        """Clone current repository into container
+        """
         logging.info("-- Cloning current Github page --")
         github_slug = self.config["github_repo"].split("/")[1]
 
@@ -131,6 +148,8 @@ class DebRepositoryBuilder:
             self.git_repo.git.checkout(self.config["gh_branch"])
 
     def generateMetadata(self) -> None:
+        """get metadata of first given .deb file
+        """
         # Generate metadata
         logging.debug(f"cwd: {os.getcwd()}")
         logging.debug(os.listdir())
@@ -148,14 +167,15 @@ class DebRepositoryBuilder:
         logging.debug(f"Metadata {json.dumps(self.current_metadata)}")
 
     def fetchRepositoryMetadata(self) -> None:
+        """fetch metadata of repository
+        """
         # Get metadata
         all_commit = self.git_repo.iter_commits(self.config["gh_branch"])
         all_apt_action_commit = list(
             filter(lambda x: (x.message[:12] == "[apt-action]"), all_commit)
         )
-        metadata_re = re.compile(r"apt-action-metadata({.+})$")
         apt_action_metadata_str = list(
-            map(lambda x: metadata_re.findall(x.message), all_apt_action_commit)
+            map(lambda x: self.metadata_re.findall(x.message), all_apt_action_commit)
         )
         apt_action_valid_metadata_str = list(
             filter(lambda x: len(x) > 0, apt_action_metadata_str)
@@ -170,13 +190,15 @@ class DebRepositoryBuilder:
         for check_metadata in apt_action_metadata:
             if check_metadata == self.current_metadata:
                 logging.info(
-                    "This version of this package has already been added to the repo, skipping it"
+                    "The specified version of this package has already been added to the repository - skipped."
                 )
                 sys.exit(0)
 
         logging.info("-- Done cloning current Github page --")
 
     def prepare(self) -> None:
+        """Import private/public key + create missing folders
+        """
         # Prepare key
         logging.info("-- Importing key --")
         key_file = os.path.join(self.git_working_folder, "public.key")
@@ -214,6 +236,8 @@ class DebRepositoryBuilder:
         logging.info("-- Done preparing repo directory --")
 
     def addFiles(self) -> None:
+        """Add all files to repository
+        """
         # Fill repo
         logging.info("-- Adding package(s) to repo --")
 
@@ -247,6 +271,15 @@ class DebRepositoryBuilder:
 
     @staticmethod
     def generateHash(filename, hash_type) -> str:
+        """Generate hash for given file
+
+        :param filename: path + filename of file to analyze
+        :type filename: str
+        :param hash_type: type of hash (ex. sha1)
+        :type hash_type: str
+        :return: hex encoded hash
+        :rtype: str
+        """
         h = hashlib.new(hash_type)
         b = bytearray(128 * 1024)
         mv = memoryview(b)
@@ -256,6 +289,8 @@ class DebRepositoryBuilder:
         return h.hexdigest()
 
     def finish(self) -> None:
+        """Commit changes
+        """
         # Commiting and push changes
         logging.info("-- Saving changes --")
 
@@ -268,16 +303,15 @@ class DebRepositoryBuilder:
 
         commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
         for deb_file in self.deb_files:
-            commit_msg += "* {} {}\n".format(deb_file, self.deb_files_hashes[deb_file])
+            commit_msg += "{}  {}\n".format(self.deb_files_hashes[deb_file], deb_file)
 
-        commit_msg += "\n\napt-action-metadata{}".format(
+        commit_msg += "\n\napt-action-metadata: {}".format(
             json.dumps(self.current_metadata)
         )
         self.git_repo.index.commit(commit_msg)
         self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
 
         logging.info("-- Done saving changes --")
-
 
 if __name__ == "__main__":
     dpb = DebRepositoryBuilder()
