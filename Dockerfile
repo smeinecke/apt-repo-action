@@ -1,4 +1,4 @@
-FROM ubuntu:bionic
+FROM ubuntu:focal
 
 LABEL maintainer="jrandiny <jrandiny@gmail.com>"
 
@@ -10,4 +10,4 @@ RUN apt install -y reprepro gpg python3 python3-git python3-gnupg expect python3
 COPY entrypoint.py /entrypoint.py
 COPY key.py /key.py
 
-ENTRYPOINT ["python3","/entrypoint.py"]
+ENTRYPOINT ["python3", "/entrypoint.py"]
