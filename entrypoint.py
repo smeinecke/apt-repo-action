@@ -13,22 +13,17 @@ import subprocess
 from debian.debfile import DebFile
 from key import detectPublicKey, importPrivateKey
 
-log_level = logging.INFO
-if os.environ.get("INPUT_DEBUG", False):
-    log_level = logging.DEBUG
-
+log_level = logging.DEBUG if os.environ.get("INPUT_DEBUG", False) else logging.INFO
 logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
-
 
 
 class DebRepositoryBuilder:
     metadata_re = re.compile(r"apt-action-metadata:?\s*({.+})$")
 
-    """Init process
-    """
     def __init__(
         self,
     ) -> None:
+        """Init all variables"""
         self.config = {
             "github_repo": None,
             "github_token": None,
@@ -45,9 +40,9 @@ class DebRepositoryBuilder:
         self.deb_files = []
         self.git_repo = None
         self.gpg = gnupg.GPG()
-        self.private_key_id = ''
+        self.private_key_id = ""
         self.deb_files_hashes = {}
-        self.apt_dir = ''
+        self.apt_dir = ""
 
     def run(self, options) -> None:
         """Process request and create/update repository
@@ -119,8 +114,7 @@ class DebRepositoryBuilder:
         logging.info("-- Done parsing input --")
 
     def cloneRepo(self) -> None:
-        """Clone current repository into container
-        """
+        """Clone current repository into container"""
         logging.info("-- Cloning current Github page --")
         github_slug = self.config["github_repo"].split("/")[1]
 
@@ -148,8 +142,7 @@ class DebRepositoryBuilder:
             self.git_repo.git.checkout(self.config["gh_branch"])
 
     def generateMetadata(self) -> None:
-        """get metadata of first given .deb file
-        """
+        """get metadata of first given .deb file"""
         # Generate metadata
         logging.debug(f"cwd: {os.getcwd()}")
         logging.debug(os.listdir())
@@ -167,8 +160,7 @@ class DebRepositoryBuilder:
         logging.debug(f"Metadata {json.dumps(self.current_metadata)}")
 
     def fetchRepositoryMetadata(self) -> None:
-        """fetch metadata of repository
-        """
+        """fetch metadata of repository"""
         # Get metadata
         all_commit = self.git_repo.iter_commits(self.config["gh_branch"])
         all_apt_action_commit = list(
@@ -197,8 +189,7 @@ class DebRepositoryBuilder:
         logging.info("-- Done cloning current Github page --")
 
     def prepare(self) -> None:
-        """Import private/public key + create missing folders
-        """
+        """Import private/public key + create missing folders"""
         # Prepare key
         logging.info("-- Importing key --")
         key_file = os.path.join(self.git_working_folder, "public.key")
@@ -236,8 +227,7 @@ class DebRepositoryBuilder:
         logging.info("-- Done preparing repo directory --")
 
     def addFiles(self) -> None:
-        """Add all files to repository
-        """
+        """Add all files to repository"""
         # Fill repo
         logging.info("-- Adding package(s) to repo --")
 
@@ -289,8 +279,7 @@ class DebRepositoryBuilder:
         return h.hexdigest()
 
     def finish(self) -> None:
-        """Commit changes
-        """
+        """Commit changes"""
         # Commiting and push changes
         logging.info("-- Saving changes --")
 
@@ -312,6 +301,7 @@ class DebRepositoryBuilder:
         self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
 
         logging.info("-- Done saving changes --")
+
 
 if __name__ == "__main__":
     dpb = DebRepositoryBuilder()
