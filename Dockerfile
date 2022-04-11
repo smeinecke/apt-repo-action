@@ -1,4 +1,4 @@
-FROM ubuntu:focal
+FROM debian:bullseye-slim
 
 LABEL maintainer="Stefan Meinecke <meinecke@greensec.de>"
 
