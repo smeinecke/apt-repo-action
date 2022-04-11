@@ -3,15 +3,16 @@ name: Docker Image CI
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'Dockerfile'
   pull_request:
     branches: [ master ]
+    paths:
+      - 'Dockerfile'
 
 jobs:
-
-  build:
-
+  build_docker_image:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
     - name: Build the Docker image
