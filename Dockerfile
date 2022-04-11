@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim
+FROM debian:bullseye
 
 LABEL maintainer="Stefan Meinecke <meinecke@greensec.de>"
 
