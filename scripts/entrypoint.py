@@ -11,7 +11,6 @@ import hashlib
 import subprocess
 
 from debian.debfile import DebFile
-from key import detectPublicKey, importPrivateKey
 
 log_level = logging.DEBUG if os.environ.get("INPUT_DEBUG", False) else logging.INFO
 logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
@@ -30,10 +29,7 @@ class DebRepositoryBuilder:
             "supported_arch": None,
             "supported_version": None,
             "deb_file_target_version": None,
-            "gh_branch": None,
-            "apt_folder": None,
-            "key_public": None,
-            "key_private": None,
+            "key_private": None
         }
         self.supported_versions = []
         self.supported_archs = []
@@ -62,6 +58,50 @@ class DebRepositoryBuilder:
             logging.exception(e)
             sys.exit(1)
 
+    @staticmethod
+    def detectPublicKey(gpg, key_file, pub_key = None):
+        """Check if public key file exists in repository"""
+        has_key_file = os.path.isfile(key_file)
+        if not pub_key:
+            if not has_key_file:
+                logging.info("Directory doesn't contain public.key trying to import")
+                raise KeyError("Please specify public key for setup")
+
+            with open(key_file, 'r') as f:
+                pub_key = f.read()
+
+        logging.debug("Trying to import key")
+        res = gpg.import_keys(pub_key)
+        if res.count != 1:
+            raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+
+        if not has_key_file:
+            with open(key_file, "w") as f:
+                f.write(pub_key)
+
+        logging.info("Public key valid")
+
+    @staticmethod
+    def importPrivateKey(gpg, sign_key):
+        """import private key"""
+        logging.info("Importing private key")
+        res = gpg.import_keys(sign_key)
+
+        if res.count != 1:
+            raise RuntimeError("Invalid private key provided, please provide 1 valid key")
+
+        if all(data["ok"] < "16" for data in res.results):
+            raise TypeError("Key provided is not a secret key")
+
+        private_key_id = res.results[0]["fingerprint"]
+
+        logging.info("Private key valid")
+        logging.debug(f"Key id: {private_key_id}")
+
+        logging.info("-- Done importing key --")
+
+        return private_key_id
+
     def parseInputs(self, options) -> None:
         """Parse all given arguments and validate syntax
 
@@ -70,16 +110,13 @@ class DebRepositoryBuilder:
         :raises ValueError: Key or Value missing / has invalid syntax
         """
         logging.info("-- Parsing input --")
-        self.config["github_repo"] = options.get("GITHUB_REPOSITORY")
+        self.config["github_repo"] = options.get('INPUT_GITHUB_REPOSITORY', os.environ.get("GITHUB_REPOSITORY"))
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
         self.config["deb_file_target_version"] = options.get(
             "INPUT_FILE_TARGET_VERSION"
         )
-        self.config["gh_branch"] = options.get("INPUT_PAGE_BRANCH", "gh-pages")
-        self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
-        self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
         self.config["key_private"] = options.get("INPUT_PRIVATE_KEY")
 
         for ky, vl in self.config.items():
@@ -102,7 +139,10 @@ class DebRepositoryBuilder:
         self.config["deb_file_version"] = self.config["deb_file_target_version"]
 
         # optional parameter
+        self.config["gh_branch"] = options.get("INPUT_PAGE_BRANCH", "gh-pages")
+        self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
+        self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
 
         logging.debug(self.config)
 
@@ -194,8 +234,8 @@ class DebRepositoryBuilder:
         logging.info("-- Importing key --")
         key_file = os.path.join(self.git_working_folder, "public.key")
 
-        detectPublicKey(self.gpg, key_file, self.config["key_public"])
-        self.private_key_id = importPrivateKey(self.gpg, self.config["key_private"])
+        self.detectPublicKey(self.gpg, key_file, self.config["key_public"])
+        self.private_key_id = self.importPrivateKey(self.gpg, self.config["key_private"])
         logging.info("-- Done importing key --")
 
         # Prepare repo
@@ -238,6 +278,7 @@ class DebRepositoryBuilder:
                     "reprepro",
                     "-b",
                     self.apt_dir,
+                    '--keepunusednewfiles',
                     "--export=silent-never",
                     "includedeb",
                     self.config["deb_file_version"],
@@ -293,10 +334,11 @@ class DebRepositoryBuilder:
         commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
         for deb_file in self.deb_files:
             commit_msg += "{}  {}\n".format(self.deb_files_hashes[deb_file], deb_file)
-
-        commit_msg += "\n\napt-action-metadata: {}".format(
-            json.dumps(self.current_metadata)
+        commit_msg += "\n\napt-action-metadata: {}\ndeploying: {}".format(
+            json.dumps(self.current_metadata),
+            os.environ.get('GITHUB_SHA')
         )
+
         self.git_repo.index.commit(commit_msg)
         self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
 

@@ -44,6 +44,10 @@ Branch of Github pages. Defaults to `gh-pages`
 
 Location of APT repo folder relative to root of Github pages. Defaults to `repo`
 
+### `github_repository`
+
+Target repository of the Github pages. Defaults to current repository.
+
 ## Example usage
 
 ```yaml

@@ -33,6 +33,9 @@ inputs:
     description: "Location of APT repo folder relative to root of Github pages"
     required: false
     default: "repo"
+  github_repository:
+    description: "Target repository of the Github pages"
+    required: false
   debug:
     description: "Print debug log"
     required: false
