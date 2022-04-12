@@ -29,7 +29,7 @@ class DebRepositoryBuilder:
             "supported_arch": None,
             "supported_version": None,
             "deb_file_target_version": None,
-            "key_private": None
+            "key_private": None,
         }
         self.supported_versions = []
         self.supported_archs = []
@@ -59,7 +59,7 @@ class DebRepositoryBuilder:
             sys.exit(1)
 
     @staticmethod
-    def detectPublicKey(gpg, key_file, pub_key = None):
+    def detectPublicKey(gpg, key_file, pub_key=None):
         """Check if public key file exists in repository"""
         has_key_file = os.path.isfile(key_file)
         if not pub_key:
@@ -67,13 +67,15 @@ class DebRepositoryBuilder:
                 logging.info("Directory doesn't contain public.key trying to import")
                 raise KeyError("Please specify public key for setup")
 
-            with open(key_file, 'r') as f:
+            with open(key_file, "r") as f:
                 pub_key = f.read()
 
         logging.debug("Trying to import key")
         res = gpg.import_keys(pub_key)
         if res.count != 1:
-            raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+            raise RuntimeError(
+                "Invalid public key provided, please provide 1 valid key"
+            )
 
         if not has_key_file:
             with open(key_file, "w") as f:
@@ -88,7 +90,9 @@ class DebRepositoryBuilder:
         res = gpg.import_keys(sign_key)
 
         if res.count != 1:
-            raise RuntimeError("Invalid private key provided, please provide 1 valid key")
+            raise RuntimeError(
+                "Invalid private key provided, please provide 1 valid key"
+            )
 
         if all(data["ok"] < "16" for data in res.results):
             raise TypeError("Key provided is not a secret key")
@@ -110,8 +114,8 @@ class DebRepositoryBuilder:
         :raises ValueError: Key or Value missing / has invalid syntax
         """
         logging.info("-- Parsing input --")
-        if options.get('INPUT_GITHUB_REPOSITORY'):
-            self.config["github_repo"] = options.get('INPUT_GITHUB_REPOSITORY')
+        if options.get("INPUT_GITHUB_REPOSITORY"):
+            self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY")
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
@@ -236,7 +240,9 @@ class DebRepositoryBuilder:
         key_file = os.path.join(self.git_working_folder, "public.key")
 
         self.detectPublicKey(self.gpg, key_file, self.config["key_public"])
-        self.private_key_id = self.importPrivateKey(self.gpg, self.config["key_private"])
+        self.private_key_id = self.importPrivateKey(
+            self.gpg, self.config["key_private"]
+        )
         logging.info("-- Done importing key --")
 
         # Prepare repo
@@ -279,7 +285,7 @@ class DebRepositoryBuilder:
                     "reprepro",
                     "-b",
                     self.apt_dir,
-                    '--keepunusednewfiles',
+                    "--keepunusednewfiles",
                     "--export=silent-never",
                     "includedeb",
                     self.config["deb_file_version"],
@@ -336,8 +342,7 @@ class DebRepositoryBuilder:
         for deb_file in self.deb_files:
             commit_msg += "{}  {}\n".format(self.deb_files_hashes[deb_file], deb_file)
         commit_msg += "\n\napt-action-metadata: {}\ndeploying: {}".format(
-            json.dumps(self.current_metadata),
-            os.environ.get('GITHUB_SHA')
+            json.dumps(self.current_metadata), os.environ.get("GITHUB_SHA")
         )
 
         self.git_repo.index.commit(commit_msg)
