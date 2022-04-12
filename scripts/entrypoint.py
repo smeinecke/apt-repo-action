@@ -24,7 +24,7 @@ class DebRepositoryBuilder:
     ) -> None:
         """Init all variables"""
         self.config = {
-            "github_repo": None,
+            "github_repo": os.environ.get("GITHUB_REPOSITORY"),
             "github_token": None,
             "supported_arch": None,
             "supported_version": None,
@@ -110,7 +110,8 @@ class DebRepositoryBuilder:
         :raises ValueError: Key or Value missing / has invalid syntax
         """
         logging.info("-- Parsing input --")
-        self.config["github_repo"] = options.get('INPUT_GITHUB_REPOSITORY', os.environ.get("GITHUB_REPOSITORY"))
+        if options.get('INPUT_GITHUB_REPOSITORY'):
+            self.config["github_repo"] = options.get('INPUT_GITHUB_REPOSITORY')
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
@@ -121,7 +122,7 @@ class DebRepositoryBuilder:
 
         for ky, vl in self.config.items():
             if not vl:
-                raise ValueError(f"Missing required parameter {ky}")
+                raise RuntimeError(f"Missing required parameter: {ky}")
             self.config[ky] = vl.strip()
 
         deb_file_path = options.get("INPUT_FILE", "")
@@ -132,7 +133,7 @@ class DebRepositoryBuilder:
 
         self.deb_files = list(file_list)
         if not self.deb_files:
-            raise ValueError("Missing required parameter files")
+            raise RuntimeError("Missing required parameter: files")
 
         self.supported_archs = self.config["supported_arch"].split("\n")
         self.supported_versions = self.config["supported_version"].split("\n")
