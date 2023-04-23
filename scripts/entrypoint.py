@@ -137,7 +137,7 @@ class DebRepositoryBuilder:
 
         self.deb_files = list(file_list)
         if not self.deb_files:
-            raise RuntimeError("Missing required parameter: files")
+            raise RuntimeError("Missing required parameter: file")
 
         self.supported_archs = self.config["supported_arch"].split("\n")
         self.supported_versions = self.config["supported_version"].split("\n")
