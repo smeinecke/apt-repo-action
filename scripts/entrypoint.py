@@ -130,6 +130,9 @@ class DebRepositoryBuilder:
             self.config[ky] = vl.strip()
 
         deb_file_path = options.get("INPUT_FILE", "")
+        if not deb_file_path:
+            raise RuntimeError("Missing required parameter: file")
+
         file_list = set()
         for line in deb_file_path.strip().split("\n"):
             for s in glob.glob(line.strip('" ')):
@@ -137,7 +140,7 @@ class DebRepositoryBuilder:
 
         self.deb_files = list(file_list)
         if not self.deb_files:
-            raise RuntimeError("Missing required parameter: file")
+            raise RuntimeError(f"No deb file(s) found for {deb_file_path}")
 
         self.supported_archs = self.config["supported_arch"].split("\n")
         self.supported_versions = self.config["supported_version"].split("\n")

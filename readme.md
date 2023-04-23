@@ -51,17 +51,17 @@ Target repository of the Github pages. Defaults to current repository.
 ## Example usage
 
 ```yaml
-uses: jrandiny/apt-repo-action@v1
+uses: smeinecke/apt-repo-action@v2.1.2
 with:
   github_token: ${{ secrets.PAT }}
   arch: |
     amd64
     i386
   version: |
-    bionic
-    trusty
-  file: my_program_bionic.deb
-  file_target_version: bionic
+    focal
+    jammy
+  file: my_program_jammy.deb
+  file_target_version: jammy
   public_key: ${{ secrets.PUBLIC }}
   private_key: ${{ secrets.PRIVATE }}
   key_passphrase: ${{ secrets.SECRET }}
