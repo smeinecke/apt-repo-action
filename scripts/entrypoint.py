@@ -289,6 +289,7 @@ class DebRepositoryBuilder:
                     "-b",
                     self.apt_dir,
                     "--keepunusednewfiles",
+                    "--ignore=undefinedtarget",
                     "--export=silent-never",
                     "includedeb",
                     self.config["deb_file_version"],
