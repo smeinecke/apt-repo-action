@@ -131,9 +131,8 @@ class DebRepositoryBuilder:
         private_key_id = res.results[0]["fingerprint"]
 
         # Log success message and key id
-        logging.info("Private key valid")
         logging.debug("Key id: %s", private_key_id)
-        logging.info("-- Done importing key --")
+        logging.info("Done importing private key")
 
         return private_key_id
 
@@ -149,7 +148,7 @@ class DebRepositoryBuilder:
         """
 
         # Parse and validate required parameters
-        logging.info("-- Parsing input --")
+        logging.info("Parsing input")
         if options.get("INPUT_GITHUB_REPOSITORY"):
             self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY")
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
@@ -195,14 +194,14 @@ class DebRepositoryBuilder:
             )
 
         logging.debug(self.config)
-        logging.info("-- Done parsing input --")
+        logging.info("Done parsing input")
 
     def clone_repo(self) -> None:
         """Clone the current Github repository into the container.
 
         :raises git.GitCommandError: If the repository cannot be cloned.
         """
-        logging.info("-- Cloning current Github page --")
+        logging.info("Cloning current Github page")
 
         # Extract repository slug from the URL
         github_slug = self.config["github_repo"].split("/")[1]
@@ -222,8 +221,8 @@ class DebRepositoryBuilder:
                 self.git_working_folder,
             )
         except git.GitCommandError as e:
-            raise git.GitCommandError(
-                "Unable to clone repository. Please ensure that the Github repository URL and access token are valid.") from e
+            raise git.GitCommandError("Unable to clone repository." +
+                                      "Please ensure that the Github repository URL and access token are valid.") from e
 
         # Check if the specified branch exists in the repository
         git_refs = self.git_repo.remotes.origin.refs
@@ -274,7 +273,7 @@ class DebRepositoryBuilder:
         Raises:
             SystemExit: The specified version of this package has already been added to the repository
         """
-        logging.info("-- Fetching repository metadata --")
+        logging.info("Fetching repository metadata")
 
         # Get all commits on the branch
         all_commits = self.git_repo.iter_commits(self.config["gh_branch"])
@@ -297,7 +296,7 @@ class DebRepositoryBuilder:
                 logging.info("The specified version of this package has already been added to the repository - skipped.")
                 sys.exit(0)
 
-        logging.info("-- Done fetching repository metadata --")
+        logging.info("Done fetching repository metadata")
 
     def import_key(self) -> None:
         """Import private/public key and create missing folders.
@@ -308,7 +307,7 @@ class DebRepositoryBuilder:
         Raises:
             ValueError: If the public key file doesn't exist or is empty.
         """
-        logging.info("-- Importing key --")
+        logging.info("Importing keys")
 
         # Prepare public key path
         public_key_path = os.path.join(self.git_working_folder, "public.key")
@@ -321,7 +320,7 @@ class DebRepositoryBuilder:
         self.detect_public_key(self.gpg, public_key_path, self.config["key_public"])
         self.private_key_id = self.import_private_key(self.gpg, self.config["key_private"])
 
-        logging.info("-- Done importing key --")
+        logging.info("Done importing keys")
 
     def prepare(self) -> None:
         """
@@ -331,7 +330,7 @@ class DebRepositoryBuilder:
         self.import_key()
 
         # Prepare repo
-        logging.info("-- Preparing repo directory --")
+        logging.info("Preparing repo directory")
         self.apt_dir = os.path.join(self.git_working_folder, self.config["apt_folder"])
         apt_conf_dir = os.path.join(self.apt_dir, "conf")
 
@@ -354,7 +353,7 @@ class DebRepositoryBuilder:
                 df.write(f"SignWith: {self.private_key_id}\n")
                 df.write("\n\n")
 
-        logging.info("-- Done preparing repo directory --")
+        logging.info("Done preparing repo directory")
 
     @staticmethod
     def generate_deb_hash(filename: str, hash_type: str) -> str:
@@ -387,10 +386,10 @@ class DebRepositoryBuilder:
 
     def add_files(self) -> None:
         """Add all deb files to the repository and sign them"""
-        logging.info("-- Adding package(s) to repo --")
+        logging.info("Adding deb files to repo")
 
         for deb_file in self.deb_files:
-            logging.info(f"Adding {deb_file}")
+            logging.info(f"* {deb_file}")
             subprocess.run(
                 [
                     "reprepro",
@@ -413,7 +412,7 @@ class DebRepositoryBuilder:
         # Export and sign repo
         subprocess.run(["reprepro", "-b", self.apt_dir, "export"], check=True)
 
-        logging.info("-- Done adding package to repo --")
+        logging.info("Done adding package to repo")
 
     def finish(self) -> None:
         """Commit changes to Git repository and push to GitHub
@@ -423,7 +422,7 @@ class DebRepositoryBuilder:
 
         """
         # Commit and push changes
-        logging.info("-- Saving changes --")
+        logging.info("Saving changes")
 
         # Set user email to avoid git errors
         github_user = self.config["github_repo"].split("/")[0]
@@ -450,7 +449,7 @@ class DebRepositoryBuilder:
         # Push changes to GitHub repository
         self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
 
-        logging.info("-- Done saving changes --")
+        logging.info("Done saving changes")
 
     def run(self, options: Dict[str, str]) -> None:
         """Process the request and create/update the APT repository.
