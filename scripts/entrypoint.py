@@ -410,7 +410,7 @@ class DebRepositoryBuilder:
         self.gpg.sign("test", keyid=self.private_key_id, passphrase=self.config.get("key_passphrase", ""))
 
         # Export and sign repo
-        subprocess.run(["reprepro", "-b", self.apt_dir, "export"], check=True)
+        subprocess.run(["reprepro", "-b", self.apt_dir, "--ignore=undefinedtarget", "export"], check=True)
 
         logging.info("Done adding package to repo")
 
