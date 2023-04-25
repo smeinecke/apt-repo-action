@@ -46,7 +46,7 @@ class DebRepositoryBuilder:
     def __init__(self) -> None:
         """Init all variables"""
         self.config = {
-            "github_repo": None,
+            "github_repo": os.getenv("GITHUB_REPOSITORY"),
             "github_token": None,
             "supported_arch": None,
             "supported_version": None,
@@ -150,7 +150,8 @@ class DebRepositoryBuilder:
 
         # Parse and validate required parameters
         logging.info("-- Parsing input --")
-        self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY", os.getenv("GITHUB_REPOSITORY"))
+        if options.get("INPUT_GITHUB_REPOSITORY"):
+            self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY")
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
