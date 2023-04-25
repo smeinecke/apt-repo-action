@@ -46,7 +46,7 @@ class DebRepositoryBuilder:
     def __init__(self) -> None:
         """Init all variables"""
         self.config = {
-            "github_repo": os.getenv("GITHUB_REPOSITORY", ""),
+            "github_repo": None,
             "github_token": None,
             "supported_arch": None,
             "supported_version": None,
@@ -147,10 +147,10 @@ class DebRepositoryBuilder:
             ValueError: Key or Value missing / has invalid syntax
             RuntimeError: Missing required parameter: file / Missing required parameter: {ky}
         """
-        logging.info("-- Parsing input --")
 
         # Parse and validate required parameters
-        self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY")
+        logging.info("-- Parsing input --")
+        self.config["github_repo"] = options.get("INPUT_GITHUB_REPOSITORY", os.getenv("GITHUB_REPOSITORY"))
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
@@ -309,9 +309,8 @@ class DebRepositoryBuilder:
         """
         logging.info("-- Importing key --")
 
-        # Prepare paths
+        # Prepare public key path
         public_key_path = os.path.join(self.git_working_folder, "public.key")
-        private_key_path = self.config["key_private"]
 
         # Check if public key file exists and is not empty
         if not os.path.exists(public_key_path) or os.path.getsize(public_key_path) == 0:
@@ -319,7 +318,7 @@ class DebRepositoryBuilder:
 
         # Import keys
         self.detect_public_key(self.gpg, public_key_path, self.config["key_public"])
-        self.private_key_id = self.import_private_key(self.gpg, private_key_path)
+        self.private_key_id = self.import_private_key(self.gpg, self.config["key_private"])
 
         logging.info("-- Done importing key --")
 
