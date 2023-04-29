@@ -51,7 +51,7 @@ Target repository of the Github pages. Defaults to current repository.
 ## Example usage
 
 ```yaml
-uses: smeinecke/apt-repo-action@v2.1.3
+uses: smeinecke/apt-repo-action@v2.1.4
 with:
   github_token: ${{ secrets.PAT }}
   arch: |
