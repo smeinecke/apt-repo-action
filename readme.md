@@ -6,7 +6,7 @@ This action will setup and manage a simple APT repo on your github pages
 
 ### `github_token`
 
-**Required** Personal access token with commit and push scope granted.
+**Required** Personal access token with commit and push scope granted. Can be set by using the github.token environment variable in your workflow.
 
 ### `repo_supported_arch`
 
@@ -53,7 +53,7 @@ Target repository of the Github pages. Defaults to current repository.
 ```yaml
 uses: smeinecke/apt-repo-action@v2.1.4
 with:
-  github_token: ${{ secrets.PAT }}
+  github_token: ${{ github.token }}
   arch: |
     amd64
     i386
