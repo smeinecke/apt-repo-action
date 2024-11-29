@@ -59,7 +59,7 @@ jobs:
     strategy:
       max-parallel: 1
       matrix:
-        os-version: ["buster", "bullseye", "bookworm"]
+        os-version: ["buster", "bullseye", "bookworm", "noble", "jammy", "focal"]
         arch: ["amd64", "arm64"]
     steps:
       - uses: actions/download-artifact@v4
@@ -76,9 +76,13 @@ jobs:
             buster
             bullseye
             bookworm
+            noble
+            jammy
+            focal
           file: |
             *~${{ matrix.os-version }}*.deb
           file_target_version: ${{ matrix.os-version }}
           private_key: ${{ secrets.APT_SIGNING_KEY }}
-          key_passphrase: ""
+          public_key: ${{ secrets.APT_SIGNING_PUBKEY }}
+          key_passphrase: ${{ secrets.APT_SIGNING_KEY_PASSPHRASE }}
 ```
