@@ -51,18 +51,34 @@ Target repository of the Github pages. Defaults to current repository.
 ## Example usage
 
 ```yaml
-uses: smeinecke/apt-repo-action@v2.1.4
-with:
-  github_token: ${{ github.token }}
-  arch: |
-    amd64
-    i386
-  version: |
-    focal
-    jammy
-  file: my_program_jammy.deb
-  file_target_version: jammy
-  public_key: ${{ secrets.PUBLIC }}
-  private_key: ${{ secrets.PRIVATE }}
-  key_passphrase: ${{ secrets.SECRET }}
+
+jobs:
+  add_repo:
+    runs-on: ubuntu-latest
+    needs: build-debs
+    strategy:
+      max-parallel: 1
+      matrix:
+        os-version: ["buster", "bullseye", "bookworm"]
+        arch: ["amd64", "arm64"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: "packages-${{ matrix.os-version }}-${{ matrix.arch }}"
+      - name: Add ${{ matrix.arch }}/${{ matrix.os-version }} release
+        uses: smeinecke/apt-repo-action@v2.1.4
+        with:
+          github_token: ${{ github.token }}
+          repo_supported_arch: |
+            amd64
+            arm64
+          repo_supported_version: |
+            buster
+            bullseye
+            bookworm
+          file: |
+            *~${{ matrix.os-version }}*.deb
+          file_target_version: ${{ matrix.os-version }}
+          private_key: ${{ secrets.APT_SIGNING_KEY }}
+          key_passphrase: ""
 ```
