@@ -312,10 +312,6 @@ class DebRepositoryBuilder:
         # Prepare public key path
         public_key_path = os.path.join(self.git_working_folder, "public.key")
 
-        # Check if public key file exists and is not empty
-        if not os.path.exists(public_key_path) or os.path.getsize(public_key_path) == 0:
-            raise ValueError("Public key file doesn't exist or is empty.")
-
         # Import keys
         self.detect_public_key(self.gpg, public_key_path, self.config["key_public"])
         self.private_key_id = self.import_private_key(self.gpg, self.config["key_private"])
