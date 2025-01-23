@@ -428,6 +428,9 @@ class DebRepositoryBuilder:
         and push them to the specified branch of the GitHub repository.
 
         """
+        if not self.deb_files_hashes:
+            return
+
         # Commit and push changes
         logging.info("Saving changes")
 
@@ -443,7 +446,8 @@ class DebRepositoryBuilder:
         # Create commit message with added/updated files and metadata
         commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
         for deb_file in self.deb_files:
-            commit_msg += f"{self.deb_files_hashes[deb_file]}  {deb_file}\n"
+            if self.deb_files_hashes.get(deb_file):
+                commit_msg += f"{self.deb_files_hashes[deb_file]}  {deb_file}\n"
 
         commit_msg += (
             f'\n\napt-action-metadata: {json.dumps(self.current_metadata)}'
