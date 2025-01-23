@@ -1,4 +1,4 @@
-name: "Github pages APT repo"
+name: "Github pages debian/ubuntu repository"
 description: "Setup and manage APT repo on Github pages"
 inputs:
   github_token:
