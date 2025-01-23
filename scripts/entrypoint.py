@@ -404,7 +404,7 @@ class DebRepositoryBuilder:
                     capture_output=True,
                 )
             except subprocess.CalledProcessError as e:
-                if self.config["skip_duplicates"] and 'Already existing files can only be included again' in e.stderr:
+                if self.config["skip_duplicates"] and b'Already existing files can only be included again' in e.stderr:
                     logging.info("Skipping %s", deb_file)
                     continue
                 logging.error("Failed to add %s to repo", deb_file)
