@@ -36,6 +36,9 @@ inputs:
   github_repository:
     description: "Target repository of the Github pages"
     required: false
+  skip_duplicates:
+    description: "Skip already added packages if same version, regardless of checksum"
+    required: false
   debug:
     description: "Print debug log"
     required: false

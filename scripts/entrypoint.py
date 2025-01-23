@@ -167,6 +167,7 @@ class DebRepositoryBuilder:
         self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
         self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
+        self.config["skip_duplicates"] = options.get("INPUT_SKIP_DUPLICATES")
 
         # Parse deb files and validate their existence
         deb_file_path = options.get("INPUT_FILE", "").strip()
@@ -385,21 +386,31 @@ class DebRepositoryBuilder:
         logging.info("Adding deb files to repo")
 
         for deb_file in self.deb_files:
-            logging.info(f"* {deb_file}")
-            subprocess.run(
-                [
-                    "reprepro",
-                    "-b",
-                    self.apt_dir,
-                    "--keepunusednewfiles",
-                    "--ignore=undefinedtarget",
-                    "--export=silent-never",
-                    "includedeb",
-                    self.config["deb_file_version"],
-                    deb_file,
-                ],
-                check=True,
-            )
+            logging.info("* %s", deb_file)
+            try:
+                res = subprocess.run(
+                    [
+                        "reprepro",
+                        "-b",
+                        self.apt_dir,
+                        "--keepunusednewfiles",
+                        "--ignore=undefinedtarget",
+                        "--export=silent-never",
+                        "includedeb",
+                        self.config["deb_file_version"],
+                        deb_file,
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as e:
+                if self.config["skip_duplicates"] and 'Already existing files can only be included again' in e.stderr:
+                    logging.info("Skipping %s", deb_file)
+                    continue
+                logging.error("Failed to add %s to repo", deb_file)
+                logging.error(e.stderr)
+                raise e
+
             self.deb_files_hashes[deb_file] = self.generate_deb_hash(deb_file, "sha1")
 
         # Unlock key on gpg agent

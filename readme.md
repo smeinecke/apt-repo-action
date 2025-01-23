@@ -30,7 +30,7 @@ This action will setup and manage a simple APT repo on your github pages
 
 ### `public_key`
 
-GPG public key for APT repo
+GPG public key for APT repo, not needed if public.key file found in repository
 
 ### `key_passphrase`
 
@@ -47,6 +47,10 @@ Location of APT repo folder relative to root of Github pages. Defaults to `repo`
 ### `github_repository`
 
 Target repository of the Github pages. Defaults to current repository.
+
+### `skip_duplicates`
+
+Skip adding duplicate packages if same version already exists. Default is `false`
 
 ## Example usage
 
