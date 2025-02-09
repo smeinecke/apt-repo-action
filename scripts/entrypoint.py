@@ -42,6 +42,7 @@ class DebRepositoryBuilder:
     deb_files_hashes: Dict[str, str]
     apt_dir: str
     git_working_folder: str
+    deb_files_versions: List[str, str]
 
     def __init__(self) -> None:
         """Init all variables"""
@@ -60,6 +61,7 @@ class DebRepositoryBuilder:
         self.gpg = gnupg.GPG()
         self.private_key_id = ""
         self.deb_files_hashes = {}
+        self.deb_files_versions = {}
         self.apt_dir = ""
 
     @staticmethod
@@ -154,7 +156,6 @@ class DebRepositoryBuilder:
         self.config["github_token"] = options.get("INPUT_GITHUB_TOKEN")
         self.config["supported_arch"] = options.get("INPUT_REPO_SUPPORTED_ARCH")
         self.config["supported_version"] = options.get("INPUT_REPO_SUPPORTED_VERSION")
-        self.config["deb_file_target_version"] = options.get("INPUT_FILE_TARGET_VERSION")
         self.config["key_private"] = options.get("INPUT_PRIVATE_KEY")
 
         for ky, vl in self.config.items():
@@ -163,11 +164,19 @@ class DebRepositoryBuilder:
             self.config[ky] = vl.strip()
 
         # Parse and validate optional parameters
+        self.config["deb_file_target_version"] = options.get("INPUT_FILE_TARGET_VERSION")
         self.config["gh_branch"] = options.get("INPUT_PAGE_BRANCH", "gh-pages")
         self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
         self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
         self.config["skip_duplicates"] = options.get("INPUT_SKIP_DUPLICATES")
+        self.config["version_by_filename"] = options.get("INPUT_VERSION_BY_FILENAME")
+
+        if not self.config["deb_file_target_version"] and not self.config["version_by_filename"]:
+            raise RuntimeError(
+                "Missing required parameter: deb_file_target_version or version_by_filename"
+            )
+
 
         # Parse deb files and validate their existence
         deb_file_path = options.get("INPUT_FILE", "").strip()
@@ -176,8 +185,10 @@ class DebRepositoryBuilder:
 
         file_list = set()
         for line in deb_file_path.split("\n"):
-            for s in glob.glob(line.strip('" ')):
-                file_list.add(s)
+            for deb_file in glob.glob(line.strip('" ')):
+                if not deb_file.endswith(".deb"):
+                    raise ValueError(f"File {deb_file} is not a deb file")
+                file_list.add(deb_file)
 
         self.deb_files = list(file_list)
         if not self.deb_files:
@@ -186,13 +197,22 @@ class DebRepositoryBuilder:
         # Parse supported architectures and versions
         self.supported_archs = self.config["supported_arch"].split("\n")
         self.supported_versions = self.config["supported_version"].split("\n")
-        self.config["deb_file_version"] = self.config["deb_file_target_version"]
 
-        # Validate if deb file version is supported
-        if self.config["deb_file_version"] not in self.supported_versions:
-            raise ValueError(
-                f'File version "{self.config["deb_file_version"]}" is not listed in repo supported version list'
-            )
+        if self.config["version_by_filename"]:
+            VERSION_RE = re.compile(r"~(\b" + r"\b|\b".join(self.supported_versions) + r"\b)[_\.-]")
+            for deb_file in self.deb_files:
+                f = VERSION_RE.search(deb_file)
+                if not f:
+                    raise ValueError(f"File {deb_file} has no valid version in filename")
+                self.deb_files_versions[deb_file] = f.group(1)
+        else:
+            self.config["deb_file_version"] = self.config["deb_file_target_version"]
+
+            # Validate if deb file version is supported
+            if self.config["deb_file_version"] not in self.supported_versions:
+                raise ValueError(
+                    f'File version "{self.config["deb_file_version"]}" is not listed in repo supported version list'
+                )
 
         logging.debug(self.config)
         logging.info("Done parsing input")
@@ -258,7 +278,7 @@ class DebRepositoryBuilder:
             "format_version": 1,
             "sw_version": deb_file_control["Version"],
             "sw_architecture": deb_file_control["Architecture"],
-            "linux_version": self.config["deb_file_version"],
+            "linux_version": self.deb_files_versions.get(self.deb_files[0], self.config["deb_file_version"])
         }
 
         logging.debug("Metadata %s", json.dumps(self.current_metadata))
@@ -397,7 +417,7 @@ class DebRepositoryBuilder:
                         "--ignore=undefinedtarget",
                         "--export=silent-never",
                         "includedeb",
-                        self.config["deb_file_version"],
+                        self.deb_files_versions.get(deb_file, self.config["deb_file_version"]),
                         deb_file,
                     ],
                     check=True,

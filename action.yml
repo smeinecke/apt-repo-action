@@ -14,8 +14,8 @@ inputs:
     description: "Newline-delimited list of .deb files"
     required: true
   file_target_version:
-    description: "Newline-delimited list of version target of supplied .deb file"
-    required: true
+    description: "Version target of supplied .deb files"
+    required: false
   public_key:
     description: "GPG public key for apt repo"
     required: false
@@ -38,6 +38,9 @@ inputs:
     required: false
   skip_duplicates:
     description: "Skip already added packages if same version, regardless of checksum"
+    required: false
+  version_by_filename:
+    description: "Parse target version from filename"
     required: false
   debug:
     description: "Print debug log"

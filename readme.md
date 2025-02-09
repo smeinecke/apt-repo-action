@@ -52,6 +52,10 @@ Target repository of the Github pages. Defaults to current repository.
 
 Skip adding duplicate packages if same version already exists. Default is `false`
 
+### `version_by_filename`
+
+Get `file_target_version` from filename of file (blablabla~`file_target_version`*.deb). Default is `false`
+
 ## Example usage
 
 ```yaml
