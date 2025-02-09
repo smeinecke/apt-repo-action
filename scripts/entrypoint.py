@@ -40,9 +40,9 @@ class DebRepositoryBuilder:
     deb_files: List[str]
     private_key_id: str
     deb_files_hashes: Dict[str, str]
+    deb_files_versions: Dict[str, str]
     apt_dir: str
     git_working_folder: str
-    deb_files_versions: List[str, str]
 
     def __init__(self) -> None:
         """Init all variables"""
