@@ -204,6 +204,7 @@ class DebRepositoryBuilder:
                 if not f:
                     raise ValueError(f"File {deb_file} has no valid version in filename")
                 self.deb_files_versions[deb_file] = f.group(1)
+            self.config["deb_file_version"] = None
         else:
             self.config["deb_file_version"] = self.config["deb_file_target_version"]
 
