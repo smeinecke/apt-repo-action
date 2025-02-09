@@ -1,4 +1,4 @@
-FROM debian:bullseye
+FROM debian:bookworm
 
 LABEL maintainer="Stefan Meinecke <meinecke@greensec.de>"
 
