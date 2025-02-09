@@ -198,7 +198,7 @@ class DebRepositoryBuilder:
         self.supported_versions = self.config["supported_version"].split("\n")
 
         if self.config["version_by_filename"]:
-            VERSION_RE = re.compile(r"~(\b" + r"\b|\b".join(self.supported_versions) + r"\b)[_\.-]")
+            VERSION_RE = re.compile(r"~(" + r"|".join(self.supported_versions) + r")[\d_\.-]")
             for deb_file in self.deb_files:
                 f = VERSION_RE.search(deb_file)
                 if not f:
