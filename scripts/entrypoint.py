@@ -51,7 +51,6 @@ class DebRepositoryBuilder:
             "github_token": None,
             "supported_arch": None,
             "supported_version": None,
-            "deb_file_target_version": None,
             "key_private": None,
         }
         self.supported_versions = []
