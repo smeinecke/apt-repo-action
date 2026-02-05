@@ -1,4 +1,4 @@
-FROM debian:bookworm
+FROM debian:trixie
 
 LABEL maintainer="Stefan Meinecke <meinecke@greensec.de>"
 
