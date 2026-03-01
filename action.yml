@@ -17,7 +17,7 @@ inputs:
     description: "Version target of supplied .deb files"
     required: false
   public_key:
-    description: "GPG public key for apt repo"
+    description: "GPG public key for apt repo; reused from public.key/public.gpg when available"
     required: false
   private_key:
     description: "GPG private key for signing apt repo"
