@@ -525,10 +525,9 @@ class DebRepositoryBuilder:
 
         # Set user email to avoid git errors
         github_user = self.config["github_repo"].split("/")[0]
-        self.git_repo.config_writer().set_value("user", "name", github_user)
-        self.git_repo.config_writer().set_value(
-            "user", "email", f"{github_user}@users.noreply.github.com"
-        )
+        with self.git_repo.config_writer() as config_writer:
+            config_writer.set_value("user", "name", github_user)
+            config_writer.set_value("user", "email", f"{github_user}@users.noreply.github.com")
 
         # Add all files to commit
         self.git_repo.git.add("*")
