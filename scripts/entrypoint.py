@@ -13,9 +13,14 @@ import subprocess
 
 from debian.debfile import DebFile
 
-log_level = logging.DEBUG if os.getenv("INPUT_DEBUG", False) else logging.INFO
+log_level = logging.DEBUG if os.getenv("INPUT_DEBUG", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+} else logging.INFO
 logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
-METADATA_RE = re.compile(r"apt-action-metadata:?\s*({.+})$")
+METADATA_RE = re.compile(r"apt-action-metadata:?\s*({.+})$", re.MULTILINE)
 
 
 class DebRepositoryBuilder:
@@ -43,6 +48,7 @@ class DebRepositoryBuilder:
     deb_files_versions: Dict[str, str]
     apt_dir: str
     git_working_folder: str
+    gh_branch_exists: bool
 
     def __init__(self) -> None:
         """Init all variables"""
@@ -62,45 +68,71 @@ class DebRepositoryBuilder:
         self.deb_files_hashes = {}
         self.deb_files_versions = {}
         self.apt_dir = ""
+        self.gh_branch_exists = False
 
     @staticmethod
-    def detect_public_key(gpg: gnupg.GPG, key_filename: str, pub_key: Optional[str] = None):
-        """Check if public key file exists in repository, and import if necessary.
+    def parse_bool(value: Optional[str]) -> bool:
+        """Parse a GitHub Action boolean-style input."""
+        if value is None:
+            return False
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def split_multiline(value: str) -> List[str]:
+        """Split a multiline input into stripped, non-empty lines."""
+        return [line.strip() for line in value.splitlines() if line.strip()]
+
+    @staticmethod
+    def import_public_key(
+        gpg: gnupg.GPG,
+        armored_key_path: str,
+        binary_key_path: str,
+        pub_key: Optional[str] = None,
+    ) -> None:
+        """Import a public key from input or repository files when available.
 
         Args:
             gpg: A GPG object used for importing the public key.
-            key_filename: A string representing the filename of the public key.
+            armored_key_path: Path of the ASCII-armored public key.
+            binary_key_path: Path of the binary exported public key.
             pub_key: An optional string representing the public key.
 
         Raises:
-            KeyError: If the public key file is not found and no pub_key is provided.
             RuntimeError: If the public key is invalid.
-
-        Returns:
-            None.
         """
-        has_key_file = os.path.isfile(key_filename)
         if pub_key:
             logging.debug("Trying to import key")
             res = gpg.import_keys(pub_key)
             if res.count != 1:
                 raise RuntimeError("Invalid public key provided, please provide 1 valid key")
-        elif has_key_file:
-            with open(key_filename, "r") as f:
-                pub_key = f.read()
+            logging.info("Public key valid")
+            return
+
+        if os.path.isfile(armored_key_path):
+            with open(armored_key_path, "r", encoding="utf-8") as f:
+                key_data = f.read()
                 logging.debug("Trying to import key")
-                res = gpg.import_keys(pub_key)
+                res = gpg.import_keys(key_data)
                 if res.count != 1:
                     raise RuntimeError("Invalid public key provided, please provide 1 valid key")
-        else:
-            logging.info("Directory doesn't contain %s key trying to import", key_filename)
-            raise KeyError("Please specify public key for setup")
+            logging.info("Public key valid")
+            return
 
-        if not has_key_file:
-            with open(key_filename, "w") as f:
-                f.write(pub_key)
+        if os.path.isfile(binary_key_path):
+            with open(binary_key_path, "rb") as f:
+                key_data = f.read()
+                logging.debug("Trying to import binary key")
+                res = gpg.import_keys(key_data)
+                if res.count != 1:
+                    raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+            logging.info("Public key valid")
+            return
 
-        logging.info("Public key valid")
+        logging.info(
+            "Directory doesn't contain %s or %s key, continuing with private key only",
+            armored_key_path,
+            binary_key_path,
+        )
 
     @staticmethod
     def import_private_key(gpg: gnupg.GPG, sign_key: str) -> str:
@@ -168,8 +200,10 @@ class DebRepositoryBuilder:
         self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
         self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
-        self.config["skip_duplicates"] = options.get("INPUT_SKIP_DUPLICATES")
-        self.config["version_by_filename"] = options.get("INPUT_VERSION_BY_FILENAME")
+        self.config["skip_duplicates"] = self.parse_bool(options.get("INPUT_SKIP_DUPLICATES"))
+        self.config["version_by_filename"] = self.parse_bool(
+            options.get("INPUT_VERSION_BY_FILENAME")
+        )
 
         if not self.config["deb_file_target_version"] and not self.config["version_by_filename"]:
             raise RuntimeError(
@@ -189,13 +223,13 @@ class DebRepositoryBuilder:
                     raise ValueError(f"File {deb_file} is not a deb file")
                 file_list.add(deb_file)
 
-        self.deb_files = list(file_list)
+        self.deb_files = sorted(file_list)
         if not self.deb_files:
             raise RuntimeError(f"No deb file(s) found for: {deb_file_path}")
 
         # Parse supported architectures and versions
-        self.supported_archs = self.config["supported_arch"].split("\n")
-        self.supported_versions = self.config["supported_version"].split("\n")
+        self.supported_archs = self.split_multiline(self.config["supported_arch"])
+        self.supported_versions = self.split_multiline(self.config["supported_version"])
 
         if self.config["version_by_filename"]:
             VERSION_RE = re.compile(r"~(" + r"|".join(self.supported_versions) + r")[\d_\.-]")
@@ -252,9 +286,20 @@ class DebRepositoryBuilder:
 
         if self.config["gh_branch"] not in git_refs_name:
             # Create a new branch if the specified branch does not exist
-            self.git_repo.git.checkout(b=self.config["gh_branch"])
+            self.gh_branch_exists = False
+            self.git_repo.git.checkout("--orphan", self.config["gh_branch"])
+            self.git_repo.git.rm("-rf", "--ignore-unmatch", ".")
+            for entry in os.listdir(self.git_working_folder):
+                if entry == ".git":
+                    continue
+                entry_path = os.path.join(self.git_working_folder, entry)
+                if os.path.isdir(entry_path):
+                    shutil.rmtree(entry_path)
+                else:
+                    os.unlink(entry_path)
         else:
             # Checkout the specified branch if it exists
+            self.gh_branch_exists = True
             self.git_repo.git.checkout(self.config["gh_branch"])
 
     def generate_metadata(self) -> None:
@@ -296,6 +341,10 @@ class DebRepositoryBuilder:
         """
         logging.info("Fetching repository metadata")
 
+        if not self.gh_branch_exists:
+            logging.info("Target branch does not exist yet, skipping metadata lookup")
+            return
+
         # Get all commits on the branch
         all_commits = self.git_repo.iter_commits(self.config["gh_branch"])
 
@@ -332,10 +381,30 @@ class DebRepositoryBuilder:
 
         # Prepare public key path
         public_key_path = os.path.join(self.git_working_folder, "public.key")
+        public_gpg_path = os.path.join(self.git_working_folder, "public.gpg")
 
         # Import keys
-        self.detect_public_key(self.gpg, public_key_path, self.config["key_public"])
         self.private_key_id = self.import_private_key(self.gpg, self.config["key_private"])
+        self.import_public_key(
+            self.gpg,
+            public_key_path,
+            public_gpg_path,
+            self.config["key_public"],
+        )
+
+        armored_public_key = self.gpg.export_keys(self.private_key_id, armor=True)
+        if not armored_public_key:
+            raise RuntimeError("Unable to export armored public key")
+        with open(public_key_path, "w", encoding="utf-8") as f:
+            f.write(armored_public_key)
+
+        binary_public_key = self.gpg.export_keys(self.private_key_id, armor=False)
+        if not binary_public_key:
+            raise RuntimeError("Unable to export binary public key")
+        if isinstance(binary_public_key, str):
+            binary_public_key = binary_public_key.encode("utf-8")
+        with open(public_gpg_path, "wb") as f:
+            f.write(binary_public_key)
 
         logging.info("Done importing keys")
 
@@ -431,7 +500,7 @@ class DebRepositoryBuilder:
                 logging.error(e.stderr)
                 raise e
 
-            self.deb_files_hashes[deb_file] = self.generate_deb_hash(deb_file, "sha1")
+            self.deb_files_hashes[deb_file] = self.generate_deb_hash(deb_file, "sha256")
 
         # Unlock key on gpg agent
         self.gpg.sign("test", keyid=self.private_key_id, passphrase=self.config.get("key_passphrase", ""))
@@ -456,9 +525,9 @@ class DebRepositoryBuilder:
 
         # Set user email to avoid git errors
         github_user = self.config["github_repo"].split("/")[0]
-        self.git_repo.config_writer().set_value(
-            "user", "email", f"{github_user}@users.noreply.github.com"
-        )
+        with self.git_repo.config_writer() as config_writer:
+            config_writer.set_value("user", "name", github_user)
+            config_writer.set_value("user", "email", f"{github_user}@users.noreply.github.com")
 
         # Add all files to commit
         self.git_repo.git.add("*")
@@ -478,7 +547,10 @@ class DebRepositoryBuilder:
         self.git_repo.index.commit(commit_msg)
 
         # Push changes to GitHub repository
-        self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
+        if self.gh_branch_exists:
+            self.git_repo.git.push("origin", self.config["gh_branch"])
+        else:
+            self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
 
         logging.info("Done saving changes")
 
