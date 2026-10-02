@@ -11,6 +11,7 @@ import json
 import hashlib
 import subprocess
 
+from debian.arfile import ArError
 from debian.debfile import DebFile
 
 log_level = logging.DEBUG if os.getenv("INPUT_DEBUG", "").strip().lower() in {
@@ -224,7 +225,7 @@ class DebRepositoryBuilder:
         for handler in logging.getLogger().handlers:
             handler.setFormatter(redacting_formatter)
 
-        if "/" not in self.config["github_repo"]:
+        if not re.fullmatch(r"[\w.-]+/[\w.-]+", self.config["github_repo"]):
             raise RuntimeError(
                 f'Invalid github_repository format "{self.config["github_repo"]}", '
                 "expected owner/repository"
@@ -238,6 +239,14 @@ class DebRepositoryBuilder:
         self.config["apt_folder"] = (
             options.get("INPUT_REPO_FOLDER") or "repo"
         ).strip().strip("/") or "repo"
+        if re.search(r"\s", self.config["gh_branch"]):
+            raise RuntimeError(
+                f'Invalid page_branch "{self.config["gh_branch"]}", whitespace is not allowed'
+            )
+        if ".." in self.config["apt_folder"].split("/"):
+            raise RuntimeError(
+                f'Invalid repo_folder "{self.config["apt_folder"]}", ".." is not allowed'
+            )
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
         self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
         self.config["skip_duplicates"] = self.parse_bool(options.get("INPUT_SKIP_DUPLICATES"))
@@ -258,7 +267,7 @@ class DebRepositoryBuilder:
 
         file_list = set()
         for line in deb_file_path.split("\n"):
-            for deb_file in glob.glob(line.strip('" ')):
+            for deb_file in glob.glob(line.strip('" '), recursive=True):
                 if not deb_file.endswith(".deb"):
                     logging.warning("Ignoring non-deb file match: %s", deb_file)
                     continue
@@ -288,9 +297,18 @@ class DebRepositoryBuilder:
                 key=len,
                 reverse=True,
             )
-            version_re = re.compile(r"~(" + "|".join(escaped_versions) + r")[\d_.-]")
+            version_re = re.compile(
+                r"~(" + "|".join(escaped_versions) + r")(?=[\d_.-]|$)"
+            )
             for deb_file in self.deb_files:
-                f = version_re.search(deb_file)
+                # Debian filenames are <name>_<version>_<arch>.deb and package
+                # names cannot contain '_', so restrict the search to the
+                # version segment. Otherwise a '~codename' in the package name
+                # could shadow the real version part.
+                base = os.path.basename(deb_file)[:-4]
+                parts = base.split("_")
+                version_segment = parts[1] if len(parts) == 3 else base
+                f = version_re.search(version_segment)
                 if not f:
                     raise ValueError(f"File {deb_file} has no valid version in filename")
                 self.deb_files_versions[deb_file] = f.group(1)
@@ -391,7 +409,7 @@ class DebRepositoryBuilder:
                         deb_file, self.config["deb_file_version"]
                     ),
                 }
-            except (ValueError, KeyError) as e:
+            except (ValueError, KeyError, ArError) as e:
                 raise RuntimeError(f"Error reading debcontrol file of {deb_file}") from e
 
             logging.debug(
@@ -676,9 +694,10 @@ class DebRepositoryBuilder:
                     ],
                     check=True,
                     capture_output=True,
+                    text=True,
                 )
             except subprocess.CalledProcessError as e:
-                if self.config["skip_duplicates"] and b'Already existing files can only be included again' in e.stderr:
+                if self.config["skip_duplicates"] and 'Already existing files can only be included again' in e.stderr:
                     logging.info("Skipping %s", deb_file)
                     continue
                 logging.error("Failed to add %s to repo", deb_file)
@@ -749,11 +768,30 @@ class DebRepositoryBuilder:
         # Commit changes
         self.git_repo.index.commit(commit_msg)
 
-        # Push changes to GitHub repository
-        if self.gh_branch_exists:
-            self.git_repo.git.push("origin", self.config["gh_branch"])
-        else:
+        # Push changes to GitHub repository. If a concurrent run already pushed
+        # to the pages branch, fetch and rebase once, then retry the push.
+        if not self.gh_branch_exists:
             self.git_repo.git.push("--set-upstream", "origin", self.config["gh_branch"])
+        else:
+            try:
+                self.git_repo.git.push("origin", self.config["gh_branch"])
+            except git.GitCommandError:
+                logging.warning(
+                    "Push rejected, fetching latest %s and retrying after rebase",
+                    self.config["gh_branch"],
+                )
+                self.git_repo.git.fetch("origin", self.config["gh_branch"])
+                try:
+                    self.git_repo.git.rebase(f"origin/{self.config['gh_branch']}")
+                except git.GitCommandError:
+                    try:
+                        self.git_repo.git.rebase("--abort")
+                    finally:
+                        raise RuntimeError(
+                            "Push failed and automatic rebase onto the latest "
+                            "remote state had conflicts; please re-run the workflow"
+                        )
+                self.git_repo.git.push("origin", self.config["gh_branch"])
 
         logging.info("Done saving changes")
 
