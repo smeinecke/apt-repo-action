@@ -11,10 +11,10 @@ inputs:
     description: "Newline-delimited list of supported (linux) version"
     required: true
   file:
-    description: "Newline-delimited list of .deb files"
+    description: "Newline-delimited list of .deb files (glob patterns supported)"
     required: true
   file_target_version:
-    description: "Version target of supplied .deb files"
+    description: "Version target of supplied .deb files (required unless version_by_filename is enabled)"
     required: false
   public_key:
     description: "GPG public key for apt repo; reused from public.key/public.gpg when available"
@@ -40,7 +40,7 @@ inputs:
     description: "Skip already added packages if same version, regardless of checksum"
     required: false
   version_by_filename:
-    description: "Parse target version from filename"
+    description: "Parse target version from filename (codename after '~', e.g. pkg_1.0~bookworm_amd64.deb)"
     required: false
   debug:
     description: "Print debug log"

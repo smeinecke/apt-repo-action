@@ -23,6 +23,20 @@ logging.basicConfig(format="%(levelname)s: %(message)s", level=log_level)
 METADATA_RE = re.compile(r"apt-action-metadata:?\s*({.+})$", re.MULTILINE)
 
 
+class _SecretRedactFormatter(logging.Formatter):
+    """Log formatter that redacts secret values from all output, including tracebacks."""
+
+    def __init__(self, fmt: str, secrets: List[Optional[str]]) -> None:
+        super().__init__(fmt)
+        self.secrets = [secret for secret in secrets if secret]
+
+    def format(self, record: logging.LogRecord) -> str:
+        output = super().format(record)
+        for secret in self.secrets:
+            output = output.replace(secret, "***")
+        return output
+
+
 class DebRepositoryBuilder:
     """
     Attributes:
@@ -34,11 +48,12 @@ class DebRepositoryBuilder:
         deb_files (list): A list of .deb package files to include in the repository.
         private_key_id (str): The ID of the private key to use for signing the repository.
         deb_files_hashes (dict): A dictionary mapping package file names to their SHA256 hashes.
+        deb_files_metadata (dict): A dictionary mapping package file names to their metadata.
         apt_dir (str): The path to the top-level directory of the repository.
     """
 
     gpg: gnupg.GPG
-    git_repo: git.Repo
+    git_repo: Optional[git.Repo]
     config: Dict[str, Optional[str]]
     supported_versions: List[str]
     supported_archs: List[str]
@@ -46,6 +61,7 @@ class DebRepositoryBuilder:
     private_key_id: str
     deb_files_hashes: Dict[str, str]
     deb_files_versions: Dict[str, str]
+    deb_files_metadata: Dict[str, Dict[str, object]]
     apt_dir: str
     git_working_folder: str
     gh_branch_exists: bool
@@ -67,6 +83,7 @@ class DebRepositoryBuilder:
         self.private_key_id = ""
         self.deb_files_hashes = {}
         self.deb_files_versions = {}
+        self.deb_files_metadata = {}
         self.apt_dir = ""
         self.gh_branch_exists = False
 
@@ -103,8 +120,8 @@ class DebRepositoryBuilder:
         if pub_key:
             logging.debug("Trying to import key")
             res = gpg.import_keys(pub_key)
-            if res.count != 1:
-                raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+            if res.count < 1:
+                raise RuntimeError("Invalid public key provided, please provide a valid key")
             logging.info("Public key valid")
             return
 
@@ -113,8 +130,8 @@ class DebRepositoryBuilder:
                 key_data = f.read()
                 logging.debug("Trying to import key")
                 res = gpg.import_keys(key_data)
-                if res.count != 1:
-                    raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+                if res.count < 1:
+                    raise RuntimeError("Invalid public key provided, please provide a valid key")
             logging.info("Public key valid")
             return
 
@@ -123,8 +140,8 @@ class DebRepositoryBuilder:
                 key_data = f.read()
                 logging.debug("Trying to import binary key")
                 res = gpg.import_keys(key_data)
-                if res.count != 1:
-                    raise RuntimeError("Invalid public key provided, please provide 1 valid key")
+                if res.count < 1:
+                    raise RuntimeError("Invalid public key provided, please provide a valid key")
             logging.info("Public key valid")
             return
 
@@ -157,8 +174,9 @@ class DebRepositoryBuilder:
         if res.count != 1:
             raise RuntimeError("Invalid private key provided, please provide 1 valid key")
 
-        # Check if the key is a secret key
-        if all(data["ok"] < "16" for data in res.results):
+        # Check if the key is a secret key (IMPORT_OK flag 0x10 = secret key imported)
+        has_secret = any(int(data.get("ok") or 0) & 16 for data in res.results)
+        if not has_secret:
             raise TypeError("Key provided is not a secret key")
 
         private_key_id = res.results[0]["fingerprint"]
@@ -194,10 +212,32 @@ class DebRepositoryBuilder:
                 raise RuntimeError(f"Missing required parameter: {ky}")
             self.config[ky] = vl.strip()
 
+        # Redact secrets from all subsequent log output (including tracebacks)
+        redacting_formatter = _SecretRedactFormatter(
+            "%(levelname)s: %(message)s",
+            [
+                self.config["github_token"],
+                self.config["key_private"],
+                options.get("INPUT_KEY_PASSPHRASE"),
+            ],
+        )
+        for handler in logging.getLogger().handlers:
+            handler.setFormatter(redacting_formatter)
+
+        if "/" not in self.config["github_repo"]:
+            raise RuntimeError(
+                f'Invalid github_repository format "{self.config["github_repo"]}", '
+                "expected owner/repository"
+            )
+
         # Parse and validate optional parameters
         self.config["deb_file_target_version"] = options.get("INPUT_FILE_TARGET_VERSION")
-        self.config["gh_branch"] = options.get("INPUT_PAGE_BRANCH", "gh-pages")
-        self.config["apt_folder"] = options.get("INPUT_REPO_FOLDER", "repo")
+        self.config["gh_branch"] = (
+            options.get("INPUT_PAGE_BRANCH") or "gh-pages"
+        ).strip() or "gh-pages"
+        self.config["apt_folder"] = (
+            options.get("INPUT_REPO_FOLDER") or "repo"
+        ).strip().strip("/") or "repo"
         self.config["key_passphrase"] = options.get("INPUT_KEY_PASSPHRASE")
         self.config["key_public"] = options.get("INPUT_PUBLIC_KEY")
         self.config["skip_duplicates"] = self.parse_bool(options.get("INPUT_SKIP_DUPLICATES"))
@@ -220,21 +260,37 @@ class DebRepositoryBuilder:
         for line in deb_file_path.split("\n"):
             for deb_file in glob.glob(line.strip('" ')):
                 if not deb_file.endswith(".deb"):
-                    raise ValueError(f"File {deb_file} is not a deb file")
-                file_list.add(deb_file)
+                    logging.warning("Ignoring non-deb file match: %s", deb_file)
+                    continue
+                file_list.add(os.path.normpath(deb_file))
 
         self.deb_files = sorted(file_list)
         if not self.deb_files:
             raise RuntimeError(f"No deb file(s) found for: {deb_file_path}")
 
-        # Parse supported architectures and versions
-        self.supported_archs = self.split_multiline(self.config["supported_arch"])
-        self.supported_versions = self.split_multiline(self.config["supported_version"])
+        # Parse supported architectures and versions (deduplicated, order preserved)
+        self.supported_archs = list(
+            dict.fromkeys(self.split_multiline(self.config["supported_arch"]))
+        )
+        self.supported_versions = list(
+            dict.fromkeys(self.split_multiline(self.config["supported_version"]))
+        )
+        if not self.supported_archs or not self.supported_versions:
+            raise RuntimeError(
+                "Parameters supported_arch and supported_version must not be empty"
+            )
 
         if self.config["version_by_filename"]:
-            VERSION_RE = re.compile(r"~(" + r"|".join(self.supported_versions) + r")[\d_\.-]")
+            # Escape versions and match longest first so that e.g.
+            # "bookworm-backports" is not shadowed by "bookworm"
+            escaped_versions = sorted(
+                (re.escape(version) for version in self.supported_versions),
+                key=len,
+                reverse=True,
+            )
+            version_re = re.compile(r"~(" + "|".join(escaped_versions) + r")[\d_.-]")
             for deb_file in self.deb_files:
-                f = VERSION_RE.search(deb_file)
+                f = version_re.search(deb_file)
                 if not f:
                     raise ValueError(f"File {deb_file} has no valid version in filename")
                 self.deb_files_versions[deb_file] = f.group(1)
@@ -248,7 +304,16 @@ class DebRepositoryBuilder:
                     f'File version "{self.config["deb_file_version"]}" is not listed in repo supported version list'
                 )
 
-        logging.debug(self.config)
+        logging.debug(
+            {
+                key: (
+                    "***"
+                    if key in {"github_token", "key_private", "key_passphrase"}
+                    else value
+                )
+                for key, value in self.config.items()
+            }
+        )
         logging.info("Done parsing input")
 
     def clone_repo(self) -> None:
@@ -276,12 +341,14 @@ class DebRepositoryBuilder:
                 self.git_working_folder,
             )
         except git.GitCommandError as e:
-            raise git.GitCommandError("Unable to clone repository." +
-                                      "Please ensure that the Github repository URL and access token are valid.") from e
+            raise git.GitCommandError(
+                "Unable to clone repository. Please ensure that the Github repository URL "
+                f"and access token are valid. Details: {e}"
+            ) from e
 
         # Check if the specified branch exists in the repository
         git_refs = self.git_repo.remotes.origin.refs
-        git_refs_name = [str(ref).split("/")[-1] for ref in git_refs]
+        git_refs_name = [ref.remote_head for ref in git_refs]
         logging.debug(git_refs_name)
 
         if self.config["gh_branch"] not in git_refs_name:
@@ -303,41 +370,45 @@ class DebRepositoryBuilder:
             self.git_repo.git.checkout(self.config["gh_branch"])
 
     def generate_metadata(self) -> None:
-        """Generate metadata of first given .deb file
+        """Generate metadata for all given .deb files
 
         Raises:
-            RuntimeError: If no .deb file is found or an error occurs while reading .deb control file
+            RuntimeError: If an error occurs while reading a .deb control file
         """
         logging.debug(f"cwd: {os.getcwd()}")
         logging.debug(os.listdir())
 
-        # Extract metadata from first .deb file
-        deb_file_handle = DebFile(filename=self.deb_files[0])
-        try:
-            deb_file_control = deb_file_handle.debcontrol()
-        except ValueError as e:
-            raise RuntimeError(f"Error reading debcontrol file of {self.deb_files[0]}") from e
+        for deb_file in self.deb_files:
+            deb_file_handle = DebFile(filename=deb_file)
+            try:
+                deb_file_control = deb_file_handle.debcontrol()
+                self.deb_files_metadata[deb_file] = {
+                    "format_version": 2,
+                    "package": deb_file_control["Package"],
+                    "sw_version": deb_file_control["Version"],
+                    "sw_architecture": deb_file_control["Architecture"],
+                    "linux_version": self.deb_files_versions.get(
+                        deb_file, self.config["deb_file_version"]
+                    ),
+                }
+            except (ValueError, KeyError) as e:
+                raise RuntimeError(f"Error reading debcontrol file of {deb_file}") from e
 
-        # Store metadata in self.current_metadata dictionary
-        self.current_metadata = {
-            "format_version": 1,
-            "sw_version": deb_file_control["Version"],
-            "sw_architecture": deb_file_control["Architecture"],
-            "linux_version": self.deb_files_versions.get(self.deb_files[0], self.config["deb_file_version"])
-        }
-
-        logging.debug("Metadata %s", json.dumps(self.current_metadata))
+            logging.debug(
+                "Metadata %s: %s", deb_file, json.dumps(self.deb_files_metadata[deb_file])
+            )
 
     def fetch_repository_metadata(self) -> None:
-        """Fetch metadata of repository and check if the package version already exists
+        """Fetch metadata of repository and skip packages that were already added
 
         The function iterates through all commits on the branch and filters out commits
-        that contain metadata in the commit message. The metadata is then parsed and stored
-        as a list of dictionaries. The function checks if the metadata for the current package
-        version already exists in the list. If so, the function exits the program.
+        that contain metadata in the commit message. Each .deb file is checked
+        individually: files whose metadata (package name, version, architecture and
+        linux version) was already committed are removed from the list of files to
+        add. This check only applies when ``skip_duplicates`` is enabled.
 
         Raises:
-            SystemExit: The specified version of this package has already been added to the repository
+            SystemExit: All specified packages have already been added to the repository
         """
         logging.info("Fetching repository metadata")
 
@@ -345,26 +416,35 @@ class DebRepositoryBuilder:
             logging.info("Target branch does not exist yet, skipping metadata lookup")
             return
 
-        # Get all commits on the branch
-        all_commits = self.git_repo.iter_commits(self.config["gh_branch"])
+        if not self.config["skip_duplicates"]:
+            logging.info("skip_duplicates disabled, skipping metadata lookup")
+            return
 
-        # Filter out commits that contain "[apt-action]" in the commit message
-        apt_action_commits = list(filter(lambda x: x.message.startswith("[apt-action]"), all_commits))
+        # Collect metadata from all previous apt-action commits
+        apt_action_metadata = []
+        for commit in self.git_repo.iter_commits(self.config["gh_branch"]):
+            if not commit.message.startswith("[apt-action]"):
+                continue
+            for match in METADATA_RE.findall(commit.message):
+                try:
+                    apt_action_metadata.append(json.loads(match))
+                except json.JSONDecodeError:
+                    logging.warning(
+                        "Ignoring malformed metadata in commit %s", commit.hexsha
+                    )
 
-        # Extract metadata from commit messages
-        apt_action_metadata_str = list(map(lambda x: METADATA_RE.findall(x.message), apt_action_commits))
+        # Drop files that were already added to the repository
+        remaining_files = []
+        for deb_file in self.deb_files:
+            if self.deb_files_metadata[deb_file] in apt_action_metadata:
+                logging.info("%s was already added to the repository - skipped", deb_file)
+            else:
+                remaining_files.append(deb_file)
 
-        # Filter out metadata strings that don't match the expected pattern
-        apt_action_valid_metadata_str = list(filter(lambda x: len(x) > 0, apt_action_metadata_str))
-
-        # Parse metadata strings into a list of dictionaries
-        apt_action_metadata = list(map(lambda x: json.loads(x[0]), apt_action_valid_metadata_str))
-
-        # Check if the metadata for the current package version already exists in the list
-        for check_metadata in apt_action_metadata:
-            if check_metadata == self.current_metadata:
-                logging.info("The specified version of this package has already been added to the repository - skipped.")
-                sys.exit(0)
+        self.deb_files = remaining_files
+        if not self.deb_files:
+            logging.info("All specified packages have already been added to the repository.")
+            sys.exit(0)
 
         logging.info("Done fetching repository metadata")
 
@@ -423,23 +503,128 @@ class DebRepositoryBuilder:
         # Create apt directory and apt conf directory if they do not exist
         if not os.path.isdir(self.apt_dir):
             logging.info("Existing repo not detected, creating new repo")
-            os.mkdir(self.apt_dir)
-            os.mkdir(apt_conf_dir)
+        os.makedirs(apt_conf_dir, exist_ok=True)
 
         logging.debug("Creating repo config")
         repo_config_fn = os.path.join(apt_conf_dir, "distributions")
 
-        # Create repo config file
-        with open(repo_config_fn, "w") as df:
-            for codename in self.supported_versions:
-                df.write(f"Description: {self.config['github_repo']}\n")
-                df.write(f"Codename: {codename}\n")
-                df.write(f"Architectures: {' '.join(self.supported_archs)}\n")
-                df.write("Components: main\n")
-                df.write(f"SignWith: {self.private_key_id}\n")
+        existing_stanzas = []
+        if os.path.isfile(repo_config_fn):
+            with open(repo_config_fn, "r", encoding="utf-8") as df:
+                existing_stanzas = self._parse_stanzas(df.read())
+
+        # Index existing stanzas by codename, keep stanzas without codename as-is
+        stanzas_by_codename = {}
+        passthrough_stanzas = []
+        for stanza in existing_stanzas:
+            codename = self._stanza_field(stanza, "Codename")
+            if codename and codename not in stanzas_by_codename:
+                stanzas_by_codename[codename] = stanza
+            else:
+                passthrough_stanzas.append(stanza)
+
+        out_stanzas = []
+        for codename in self.supported_versions:
+            existing = stanzas_by_codename.pop(codename, None)
+            if existing is not None:
+                out_stanzas.append(self._merge_stanza(existing, codename))
+            else:
+                out_stanzas.append(
+                    [
+                        f"Description: {self.config['github_repo']}",
+                        f"Codename: {codename}",
+                        f"Architectures: {' '.join(self.supported_archs)}",
+                        "Components: main",
+                        f"SignWith: {self.private_key_id}",
+                    ]
+                )
+
+        # Keep stanzas for codenames that are no longer in the supported list,
+        # but refresh their SignWith so reprepro can sign them with the
+        # currently imported key. Stanzas without a codename pass through.
+        for stanza in stanzas_by_codename.values():
+            out_stanzas.append(self._merge_stanza(stanza))
+        out_stanzas.extend(passthrough_stanzas)
+
+        with open(repo_config_fn, "w", encoding="utf-8") as df:
+            for stanza in out_stanzas:
+                df.write("\n".join(stanza))
                 df.write("\n\n")
 
         logging.info("Done preparing repo directory")
+
+    @staticmethod
+    def _parse_stanzas(text: str) -> List[List[str]]:
+        """Split a reprepro distributions file into stanzas (lists of lines)."""
+        stanzas = []
+        stanza = []
+        for line in text.splitlines():
+            if line.strip():
+                stanza.append(line)
+            elif stanza:
+                stanzas.append(stanza)
+                stanza = []
+        if stanza:
+            stanzas.append(stanza)
+        return stanzas
+
+    @staticmethod
+    def _stanza_field(stanza: List[str], name: str) -> Optional[str]:
+        """Return the value of the first occurrence of a field in a stanza."""
+        for line in stanza:
+            if line[:1] in (" ", "\t"):
+                continue
+            field, sep, value = line.partition(":")
+            if sep and field.strip() == name:
+                return value.strip()
+        return None
+
+    def _merge_stanza(self, stanza: List[str], codename: Optional[str] = None) -> List[str]:
+        """Update managed fields of an existing stanza, preserving custom fields.
+
+        SignWith is always refreshed to the currently imported key. When
+        ``codename`` is given, Codename and Architectures are also refreshed
+        and Description/Components are added when missing.
+        """
+        managed = {"SignWith": self.private_key_id}
+        forced = {"SignWith"}
+        if codename is not None:
+            managed.update(
+                {
+                    "Description": self.config["github_repo"],
+                    "Codename": codename,
+                    "Architectures": " ".join(self.supported_archs),
+                    "Components": "main",
+                }
+            )
+            forced |= {"Codename", "Architectures"}
+        merged = []
+        emitted = set()
+        drop_continuation = False
+        for line in stanza:
+            if line[:1] in (" ", "\t"):
+                if not drop_continuation:
+                    merged.append(line)
+                continue
+            field_name, sep, _ = line.partition(":")
+            field_name = field_name.strip()
+            drop_continuation = False
+            if sep and field_name in managed:
+                if field_name in emitted:
+                    drop_continuation = True
+                    continue
+                if field_name in forced:
+                    merged.append(f"{field_name}: {managed[field_name]}")
+                    drop_continuation = True
+                else:
+                    merged.append(line)
+                emitted.add(field_name)
+            else:
+                merged.append(line)
+        for field_name, value in managed.items():
+            if field_name not in emitted:
+                merged.append(f"{field_name}: {value}")
+        return merged
 
     @staticmethod
     def generate_deb_hash(filename: str, hash_type: str) -> str:
@@ -503,7 +688,15 @@ class DebRepositoryBuilder:
             self.deb_files_hashes[deb_file] = self.generate_deb_hash(deb_file, "sha256")
 
         # Unlock key on gpg agent
-        self.gpg.sign("test", keyid=self.private_key_id, passphrase=self.config.get("key_passphrase", ""))
+        sign_result = self.gpg.sign(
+            "test",
+            keyid=self.private_key_id,
+            passphrase=self.config["key_passphrase"],
+        )
+        if not sign_result:
+            raise RuntimeError(
+                "Unable to sign with private key - check private_key and key_passphrase"
+            )
 
         # Export and sign repo
         subprocess.run(["reprepro", "-b", self.apt_dir, "--ignore=undefinedtarget", "export"], check=True)
@@ -532,16 +725,26 @@ class DebRepositoryBuilder:
         # Add all files to commit
         self.git_repo.git.add("*")
 
+        # Abort if there is nothing to commit (e.g. identical re-run).
+        # On a fresh orphan branch there is no HEAD yet, so the check is skipped.
+        if self.gh_branch_exists and not self.git_repo.index.diff("HEAD"):
+            logging.info("No changes to commit")
+            return
+
         # Create commit message with added/updated files and metadata
         commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
         for deb_file in self.deb_files:
-            if self.deb_files_hashes.get(deb_file):
+            if deb_file in self.deb_files_hashes:
                 commit_msg += f"{self.deb_files_hashes[deb_file]}  {deb_file}\n"
 
-        commit_msg += (
-            f'\n\napt-action-metadata: {json.dumps(self.current_metadata)}'
-            f'\ndeploying: {os.getenv("GITHUB_SHA")}'
-        )
+        commit_msg += "\n"
+        for deb_file in self.deb_files:
+            if deb_file in self.deb_files_hashes:
+                commit_msg += (
+                    f"apt-action-metadata: "
+                    f"{json.dumps(self.deb_files_metadata[deb_file])}\n"
+                )
+        commit_msg += f'deploying: {os.getenv("GITHUB_SHA")}'
 
         # Commit changes
         self.git_repo.index.commit(commit_msg)

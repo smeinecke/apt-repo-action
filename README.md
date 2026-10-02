@@ -18,11 +18,11 @@ This action will setup and manage a simple APT repo on your github pages
 
 ### `file`
 
-**Required** .deb file(s) to be included - accepts wildcards
+**Required** .deb file(s) to be included. Accepts a newline-delimited list; each entry may be a path or a glob pattern (e.g. `dist/*.deb`). Matches that do not end in `.deb` are ignored.
 
 ### `file_target_version`
 
-**Required** Version target of supplied .deb file
+Version target of supplied .deb file. **Required** unless `version_by_filename` is enabled.
 
 ### `private_key`
 
@@ -50,11 +50,17 @@ Target repository of the Github pages. Defaults to current repository.
 
 ### `skip_duplicates`
 
-Skip adding duplicate packages if same version already exists. Default is `false`
+Skip already added packages if same version already exists (regardless of checksum), instead of failing. Default is `false`
 
 ### `version_by_filename`
 
-Get `file_target_version` from filename of file (blablabla~`file_target_version`*.deb). Default is `false`
+Get `file_target_version` from the filename of each .deb file instead of `file_target_version`. The filename must contain `~<codename>` followed by `.`, `_`, `-` or a digit, e.g. `mypackage_1.0~bookworm_amd64.deb`. Default is `false`
+
+## Notes
+
+- The action publishes the signing key as `public.key` (ASCII-armored) and `public.gpg` (binary) at the root of the pages branch. `public_key` is optional — when omitted, an existing `public.key`/`public.gpg` on the branch is reused, otherwise the public part is derived from `private_key`.
+- Concurrent runs against the same `page_branch` are not supported — the last push wins. Serialize concurrent jobs (e.g. matrix builds with `max-parallel: 1` as in the example below).
+- Without `skip_duplicates`, re-adding an unchanged package version succeeds (idempotent), but re-adding the same version with *different content* fails. Set `skip_duplicates: true` to silently skip already added packages instead.
 
 ## Example usage
 

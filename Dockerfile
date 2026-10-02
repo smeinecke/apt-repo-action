@@ -1,12 +1,15 @@
 FROM debian:trixie
 
-LABEL maintainer="Stefan Meinecke <meinecke@greensec.de>"
+LABEL org.opencontainers.image.authors="Stefan Meinecke <meinecke@greensec.de>"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -e \
-    && apt update \
-    && apt install -y reprepro gpg python3 python3-git python3-gnupg expect python3-debian
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates git gpg reprepro \
+       python3 python3-git python3-gnupg python3-debian \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY scripts /
 
