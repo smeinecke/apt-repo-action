@@ -18,7 +18,7 @@ This action will setup and manage a simple APT repo on your github pages
 
 ### `file`
 
-**Required** .deb file(s) to be included. Accepts a newline-delimited list; each entry may be a path or a glob pattern (e.g. `dist/*.deb`). Matches that do not end in `.deb` are ignored.
+**Required** .deb file(s) to be included. Accepts a newline-delimited list; each entry may be a path or a glob pattern (e.g. `dist/*.deb`; `**` recurses into subdirectories). Matches that do not end in `.deb` are ignored.
 
 ### `file_target_version`
 
@@ -38,15 +38,15 @@ Passphrase of GPG private key
 
 ### `page_branch`
 
-Branch of Github pages. Defaults to `gh-pages`
+Branch of Github pages (whitespace is not allowed). Defaults to `gh-pages`
 
 ### `repo_folder`
 
-Location of APT repo folder relative to root of Github pages. Defaults to `repo`
+Location of APT repo folder relative to root of Github pages (`..` components are rejected). Defaults to `repo`
 
 ### `github_repository`
 
-Target repository of the Github pages. Defaults to current repository.
+Target repository of the Github pages in `owner/repository` form. Defaults to current repository.
 
 ### `skip_duplicates`
 
@@ -54,12 +54,12 @@ Skip already added packages if same version already exists (regardless of checks
 
 ### `version_by_filename`
 
-Get `file_target_version` from the filename of each .deb file instead of `file_target_version`. The filename must contain `~<codename>` followed by `.`, `_`, `-` or a digit, e.g. `mypackage_1.0~bookworm_amd64.deb`. Default is `false`
+Get `file_target_version` from the filename of each .deb file instead of `file_target_version`. The codename is read from the version segment of the Debian filename (`<name>_<version>_<arch>.deb`): it must contain `~<codename>` followed by `.`, `_`, `-`, a digit, or the end of the version segment — e.g. `mypackage_1.0~bookworm_amd64.deb`. Default is `false`
 
 ## Notes
 
-- The action publishes the signing key as `public.key` (ASCII-armored) and `public.gpg` (binary) at the root of the pages branch. `public_key` is optional — when omitted, an existing `public.key`/`public.gpg` on the branch is reused, otherwise the public part is derived from `private_key`.
-- Concurrent runs against the same `page_branch` are not supported — the last push wins. Serialize concurrent jobs (e.g. matrix builds with `max-parallel: 1` as in the example below).
+- The action publishes the signing key as `public.key` (ASCII-armored) and `public.gpg` (binary) at the root of the pages branch; both are always regenerated from `private_key`. `public_key` (or existing `public.key`/`public.gpg` files) are only imported into the keyring and are not required.
+- If a push is rejected because another run already pushed to `page_branch`, the action fetches, rebases onto the latest remote state, and retries once. Concurrent runs that touch the same files can still conflict — serialize concurrent jobs when in doubt (e.g. matrix builds with `max-parallel: 1` as in the example below).
 - Without `skip_duplicates`, re-adding an unchanged package version succeeds (idempotent), but re-adding the same version with *different content* fails. Set `skip_duplicates: true` to silently skip already added packages instead.
 
 ## Example usage
@@ -80,7 +80,7 @@ jobs:
         with:
           name: "packages-${{ matrix.os-version }}-${{ matrix.arch }}"
       - name: Add ${{ matrix.arch }}/${{ matrix.os-version }} release
-        uses: smeinecke/apt-repo-action@v2.1.4
+        uses: smeinecke/apt-repo-action@v2.2.1
         with:
           github_token: ${{ github.token }}
           repo_supported_arch: |
