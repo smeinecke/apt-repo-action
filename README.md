@@ -80,7 +80,7 @@ jobs:
         with:
           name: "packages-${{ matrix.os-version }}-${{ matrix.arch }}"
       - name: Add ${{ matrix.arch }}/${{ matrix.os-version }} release
-        uses: smeinecke/apt-repo-action@v2.2.1
+        uses: smeinecke/apt-repo-action@v2.2.2
         with:
           github_token: ${{ github.token }}
           repo_supported_arch: |
