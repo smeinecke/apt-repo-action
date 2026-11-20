@@ -98,8 +98,8 @@ class DebRepositoryBuilder:
 
     @staticmethod
     def split_multiline(value: str) -> List[str]:
-        """Split a multiline input into stripped, non-empty lines."""
-        return [line.strip() for line in value.splitlines() if line.strip()]
+        """Split a multiline/whitespace-delimited input into non-empty tokens."""
+        return value.split()
 
     @staticmethod
     def import_public_key(
@@ -127,7 +127,7 @@ class DebRepositoryBuilder:
             logging.info("Public key valid")
             return
 
-        if os.path.isfile(armored_key_path):
+        if os.path.isfile(armored_key_path) and os.path.getsize(armored_key_path) > 0:
             with open(armored_key_path, "r", encoding="utf-8") as f:
                 key_data = f.read()
                 logging.debug("Trying to import key")
@@ -137,7 +137,7 @@ class DebRepositoryBuilder:
             logging.info("Public key valid")
             return
 
-        if os.path.isfile(binary_key_path):
+        if os.path.isfile(binary_key_path) and os.path.getsize(binary_key_path) > 0:
             with open(binary_key_path, "rb") as f:
                 key_data = f.read()
                 logging.debug("Trying to import binary key")
@@ -226,7 +226,13 @@ class DebRepositoryBuilder:
         for handler in logging.getLogger().handlers:
             handler.setFormatter(redacting_formatter)
 
-        if not re.fullmatch(r"[\w.-]+/[\w.-]+", self.config["github_repo"]):
+        owner, _, repo_slug = self.config["github_repo"].partition("/")
+        if (
+            not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", owner)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", repo_slug)
+            or repo_slug in {".", ".."}
+            or repo_slug.endswith((".git", "."))
+        ):
             raise RuntimeError(
                 f'Invalid github_repository format "{self.config["github_repo"]}", '
                 "expected owner/repository"
@@ -421,8 +427,9 @@ class DebRepositoryBuilder:
         logging.debug(os.listdir())
 
         for deb_file in self.deb_files:
-            deb_file_handle = DebFile(filename=deb_file)
+            deb_file_handle = None
             try:
+                deb_file_handle = DebFile(filename=deb_file)
                 deb_file_control = deb_file_handle.debcontrol()
                 self.deb_files_metadata[deb_file] = {
                     "format_version": 2,
@@ -433,10 +440,11 @@ class DebRepositoryBuilder:
                         deb_file, self.config["deb_file_version"]
                     ),
                 }
-            except (ValueError, KeyError, ArError) as e:
+            except (ValueError, KeyError, OSError, ArError) as e:
                 raise RuntimeError(f"Error reading debcontrol file of {deb_file}") from e
             finally:
-                deb_file_handle.close()
+                if deb_file_handle is not None:
+                    deb_file_handle.close()
 
             logging.debug(
                 "Metadata %s: %s", deb_file, json.dumps(self.deb_files_metadata[deb_file])
@@ -467,9 +475,12 @@ class DebRepositoryBuilder:
         # Collect metadata from all previous apt-action commits
         apt_action_metadata = []
         for commit in self.git_repo.iter_commits(self.config["gh_branch"]):
-            if not commit.message.startswith("[apt-action]"):
+            message = commit.message
+            if isinstance(message, bytes):
+                message = message.decode("utf-8", "replace")
+            if not message.startswith("[apt-action]"):
                 continue
-            for match in METADATA_RE.findall(commit.message):
+            for match in METADATA_RE.findall(message):
                 try:
                     apt_action_metadata.append(json.loads(match))
                 except json.JSONDecodeError:
@@ -762,9 +773,6 @@ class DebRepositoryBuilder:
         and push them to the specified branch of the GitHub repository.
 
         """
-        if not self.deb_files_hashes:
-            return
-
         # Commit and push changes
         logging.info("Saving changes")
 
@@ -774,8 +782,8 @@ class DebRepositoryBuilder:
             config_writer.set_value("user", "name", github_user)
             config_writer.set_value("user", "email", f"{github_user}@users.noreply.github.com")
 
-        # Add all files to commit
-        self.git_repo.git.add("*")
+        # Add all files to commit, including deletions reprepro may have made
+        self.git_repo.git.add("-A", ".")
 
         # Abort if there is nothing to commit (e.g. identical re-run).
         # On a fresh orphan branch there is no HEAD yet, so the check is skipped.
