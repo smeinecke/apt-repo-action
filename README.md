@@ -38,7 +38,7 @@ Passphrase of GPG private key
 
 ### `page_branch`
 
-Branch of Github pages (whitespace is not allowed). Defaults to `gh-pages`
+Branch of Github pages (must be a valid git branch name). Defaults to `gh-pages`
 
 ### `repo_folder`
 
@@ -54,7 +54,7 @@ Skip already added packages if same version already exists (regardless of checks
 
 ### `version_by_filename`
 
-Get `file_target_version` from the filename of each .deb file instead of `file_target_version`. The codename is read from the version segment of the Debian filename (`<name>_<version>_<arch>.deb`): it must contain `~<codename>` followed by `.`, `_`, `-`, a digit, or the end of the version segment — e.g. `mypackage_1.0~bookworm_amd64.deb`. Default is `false`
+Get `file_target_version` from the filename of each .deb file instead of `file_target_version`. The codename is read from the version segment of the Debian filename (`<name>_<version>_<arch>.deb`): it must contain `~<codename>` followed by `+`, `.`, `_`, `-`, a digit, or the end of the version segment — e.g. `mypackage_1.0~bookworm_amd64.deb`. Default is `false`
 
 ## Notes
 

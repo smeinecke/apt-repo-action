@@ -86,6 +86,7 @@ class DebRepositoryBuilder:
         self.deb_files_versions = {}
         self.deb_files_metadata = {}
         self.apt_dir = ""
+        self.git_working_folder = ""
         self.gh_branch_exists = False
 
     @staticmethod
@@ -232,16 +233,27 @@ class DebRepositoryBuilder:
             )
 
         # Parse and validate optional parameters
-        self.config["deb_file_target_version"] = options.get("INPUT_FILE_TARGET_VERSION")
+        self.config["deb_file_target_version"] = (
+            options.get("INPUT_FILE_TARGET_VERSION") or ""
+        ).strip()
         self.config["gh_branch"] = (
             options.get("INPUT_PAGE_BRANCH") or "gh-pages"
         ).strip() or "gh-pages"
         self.config["apt_folder"] = (
             options.get("INPUT_REPO_FOLDER") or "repo"
         ).strip().strip("/") or "repo"
-        if re.search(r"\s", self.config["gh_branch"]):
+        gh_branch = self.config["gh_branch"]
+        if (
+            re.search(r"[\x00-\x20\x7f~^:?*\[\]\\]", gh_branch)
+            or ".." in gh_branch
+            or "@{" in gh_branch
+            or "//" in gh_branch
+            or "/." in gh_branch
+            or gh_branch.startswith(("-", "/", "."))
+            or gh_branch.endswith(("/", ".", ".lock"))
+        ):
             raise RuntimeError(
-                f'Invalid page_branch "{self.config["gh_branch"]}", whitespace is not allowed'
+                f'Invalid page_branch "{gh_branch}", it is not a valid git branch name'
             )
         if ".." in self.config["apt_folder"].split("/"):
             raise RuntimeError(
@@ -267,9 +279,14 @@ class DebRepositoryBuilder:
 
         file_list = set()
         for line in deb_file_path.split("\n"):
-            for deb_file in glob.glob(line.strip('" '), recursive=True):
+            for deb_file in glob.glob(
+                line.strip().strip('"').strip(), recursive=True
+            ):
                 if not deb_file.endswith(".deb"):
                     logging.warning("Ignoring non-deb file match: %s", deb_file)
+                    continue
+                if not os.path.isfile(deb_file):
+                    logging.warning("Ignoring non-file match: %s", deb_file)
                     continue
                 file_list.add(os.path.normpath(deb_file))
 
@@ -298,7 +315,7 @@ class DebRepositoryBuilder:
                 reverse=True,
             )
             version_re = re.compile(
-                r"~(" + "|".join(escaped_versions) + r")(?=[\d_.-]|$)"
+                r"~(" + "|".join(escaped_versions) + r")(?=[\d_.+-]|$)"
             )
             for deb_file in self.deb_files:
                 # Debian filenames are <name>_<version>_<arch>.deb and package
@@ -345,9 +362,16 @@ class DebRepositoryBuilder:
         github_slug = self.config["github_repo"].split("/")[1]
 
         # Set working folder name and delete any existing folder
-        self.git_working_folder = f"{github_slug}-{self.config['gh_branch']}"
-        if os.path.exists(self.git_working_folder):
-            shutil.rmtree(self.git_working_folder)
+        self.git_working_folder = f"{github_slug}-{self.config['gh_branch']}".replace(
+            "/", "-"
+        )
+        if os.path.lexists(self.git_working_folder):
+            if os.path.isdir(self.git_working_folder) and not os.path.islink(
+                self.git_working_folder
+            ):
+                shutil.rmtree(self.git_working_folder)
+            else:
+                os.unlink(self.git_working_folder)
 
         # Clone repository using access token and working folder
         logging.debug(f"cwd: {os.getcwd()}")
@@ -359,7 +383,7 @@ class DebRepositoryBuilder:
                 self.git_working_folder,
             )
         except git.GitCommandError as e:
-            raise git.GitCommandError(
+            raise RuntimeError(
                 "Unable to clone repository. Please ensure that the Github repository URL "
                 f"and access token are valid. Details: {e}"
             ) from e
@@ -411,6 +435,8 @@ class DebRepositoryBuilder:
                 }
             except (ValueError, KeyError, ArError) as e:
                 raise RuntimeError(f"Error reading debcontrol file of {deb_file}") from e
+            finally:
+                deb_file_handle.close()
 
             logging.debug(
                 "Metadata %s: %s", deb_file, json.dumps(self.deb_files_metadata[deb_file])
@@ -624,7 +650,7 @@ class DebRepositoryBuilder:
                 if not drop_continuation:
                     merged.append(line)
                 continue
-            field_name, sep, _ = line.partition(":")
+            field_name, sep, old_value = line.partition(":")
             field_name = field_name.strip()
             drop_continuation = False
             if sep and field_name in managed:
@@ -632,7 +658,14 @@ class DebRepositoryBuilder:
                     drop_continuation = True
                     continue
                 if field_name in forced:
-                    merged.append(f"{field_name}: {managed[field_name]}")
+                    new_value = managed[field_name]
+                    if (
+                        field_name == "Architectures"
+                        and "source" in old_value.split()
+                        and "source" not in new_value.split()
+                    ):
+                        new_value += " source"
+                    merged.append(f"{field_name}: {new_value}")
                     drop_continuation = True
                 else:
                     merged.append(line)
@@ -680,7 +713,7 @@ class DebRepositoryBuilder:
         for deb_file in self.deb_files:
             logging.info("* %s", deb_file)
             try:
-                res = subprocess.run(
+                subprocess.run(
                     [
                         "reprepro",
                         "-b",
@@ -697,7 +730,7 @@ class DebRepositoryBuilder:
                     text=True,
                 )
             except subprocess.CalledProcessError as e:
-                if self.config["skip_duplicates"] and 'Already existing files can only be included again' in e.stderr:
+                if self.config["skip_duplicates"] and "Already existing files" in (e.stderr or ""):
                     logging.info("Skipping %s", deb_file)
                     continue
                 logging.error("Failed to add %s to repo", deb_file)
@@ -763,7 +796,7 @@ class DebRepositoryBuilder:
                     f"apt-action-metadata: "
                     f"{json.dumps(self.deb_files_metadata[deb_file])}\n"
                 )
-        commit_msg += f'deploying: {os.getenv("GITHUB_SHA")}'
+        commit_msg += f'deploying: {os.getenv("GITHUB_SHA") or "unknown"}'
 
         # Commit changes
         self.git_repo.index.commit(commit_msg)
