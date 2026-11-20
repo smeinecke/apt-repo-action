@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List
+from typing import Any, Dict, List, Optional
 import os
 import sys
 import logging
@@ -55,7 +55,7 @@ class DebRepositoryBuilder:
 
     gpg: gnupg.GPG
     git_repo: Optional[git.Repo]
-    config: Dict[str, Optional[str]]
+    config: Dict[str, Any]
     supported_versions: List[str]
     supported_archs: List[str]
     deb_files: List[str]
@@ -181,7 +181,9 @@ class DebRepositoryBuilder:
         if not has_secret:
             raise TypeError("Key provided is not a secret key")
 
-        private_key_id = res.results[0]["fingerprint"]
+        private_key_id = res.results[0].get("fingerprint") if res.results else None
+        if not private_key_id:
+            raise RuntimeError("Unable to determine fingerprint of imported key")
 
         # Log success message and key id
         logging.debug("Key id: %s", private_key_id)
@@ -257,6 +259,18 @@ class DebRepositoryBuilder:
             or "/." in gh_branch
             or gh_branch.startswith(("-", "/", "."))
             or gh_branch.endswith(("/", ".", ".lock"))
+            or gh_branch
+            in {
+                "HEAD",
+                "FETCH_HEAD",
+                "ORIG_HEAD",
+                "MERGE_HEAD",
+                "REBASE_HEAD",
+                "CHERRY_PICK_HEAD",
+                "REVERT_HEAD",
+                "BISECT_HEAD",
+                "AUTO_MERGE",
+            }
         ):
             raise RuntimeError(
                 f'Invalid page_branch "{gh_branch}", it is not a valid git branch name'
@@ -792,19 +806,20 @@ class DebRepositoryBuilder:
             return
 
         # Create commit message with added/updated files and metadata
-        commit_msg = "[apt-action] Update apt repo\n\n\nAdded/updated file(s):\n"
-        for deb_file in self.deb_files:
-            if deb_file in self.deb_files_hashes:
-                commit_msg += f"{self.deb_files_hashes[deb_file]}  {deb_file}\n"
-
-        commit_msg += "\n"
-        for deb_file in self.deb_files:
-            if deb_file in self.deb_files_hashes:
-                commit_msg += (
-                    f"apt-action-metadata: "
-                    f"{json.dumps(self.deb_files_metadata[deb_file])}\n"
-                )
-        commit_msg += f'deploying: {os.getenv("GITHUB_SHA") or "unknown"}'
+        commit_msg = "[apt-action] Update apt repo\n"
+        if self.deb_files_hashes:
+            commit_msg += "\n\nAdded/updated file(s):\n"
+            for deb_file in self.deb_files:
+                if deb_file in self.deb_files_hashes:
+                    commit_msg += f"{self.deb_files_hashes[deb_file]}  {deb_file}\n"
+            commit_msg += "\n"
+            for deb_file in self.deb_files:
+                if deb_file in self.deb_files_hashes:
+                    commit_msg += (
+                        f"apt-action-metadata: "
+                        f"{json.dumps(self.deb_files_metadata[deb_file])}\n"
+                    )
+        commit_msg += f'\ndeploying: {os.getenv("GITHUB_SHA") or "unknown"}'
 
         # Commit changes
         self.git_repo.index.commit(commit_msg)

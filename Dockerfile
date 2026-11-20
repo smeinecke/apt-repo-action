@@ -13,4 +13,6 @@ RUN set -e \
 
 COPY scripts /
 
+RUN python3 -m py_compile /entrypoint.py
+
 ENTRYPOINT ["python3", "/entrypoint.py"]
